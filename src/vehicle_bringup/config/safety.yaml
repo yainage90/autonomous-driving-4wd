@@ -1,0 +1,4 @@
+/**:
+  ros__parameters:
+    command_timeout_sec: 0.5
+    default_speed_mps: 0.0

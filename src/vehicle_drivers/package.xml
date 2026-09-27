@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>vehicle_drivers</name>
+  <version>0.0.1</version>
+  <description>Hardware drivers for vehicle actuators and sensors.</description>
+  <maintainer email="maintainer@example.com">vehicle_team</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <test_depend>ament_pytest</test_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
