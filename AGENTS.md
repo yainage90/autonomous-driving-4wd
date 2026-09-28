@@ -45,5 +45,5 @@ colcon test-result --verbose
 
 ## 참고 문서
 - ros2 jazzy docs: https://docs.ros.org/en/jazzy/Concepts/Advanced/About-Build-System.html
-- nav2 jaazy docs: https://docs.nav2.org/jazzy/
+- nav2 jazzy docs: https://docs.nav2.org/jazzy/
 - gazebo harmonic docs: https://gazebosim.org/docs/harmonic/getstarted/
