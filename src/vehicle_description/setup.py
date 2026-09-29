@@ -9,6 +9,7 @@ setup(name=package_name, version='0.0.1', packages=find_packages(), data_files=[
     ('share/' + package_name + '/urdf', glob('urdf/*')),
     ('share/' + package_name + '/meshes', glob('meshes/*')),
     ('share/' + package_name + '/rviz', glob('rviz/*')),
+    ('share/' + package_name + '/launch', glob('launch/*')),
 ], install_requires=['setuptools'], zip_safe=True, maintainer='vehicle_team',
     maintainer_email='maintainer@example.com',
     description='URDF, meshes, and RViz resources for the 4WD vehicle.', license='Apache-2.0')
