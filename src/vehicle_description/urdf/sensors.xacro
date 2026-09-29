@@ -1,0 +1,231 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- 9축 IMU 모듈 -->
+  <xacro:macro name="imu" params="parent x y z">
+    <link name="imu_link">
+      <!-- 링크 원점은 장착면, 형상 중심은 그보다 4 mm 위 -->
+      <visual>
+        <origin xyz="0 0 0.004" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.028 0.020 0.008"/>
+        </geometry>
+        <material name="imu_blue">
+          <color rgba="0.10 0.25 0.75 1.0"/>
+        </material>
+      </visual>
+
+      <collision>
+        <origin xyz="0 0 0.004" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.028 0.020 0.008"/>
+        </geometry>
+      </collision>
+
+      <!-- 균일한 직육면체로 근사한 질량과 관성 -->
+      <inertial>
+        <origin xyz="0 0 0.004" rpy="0 0 0"/>
+        <mass value="0.010"/>
+        <inertia
+          ixx="3.86667e-7" ixy="0" ixz="0"
+          iyy="7.06667e-7" iyz="0"
+          izz="9.86667e-7"/>
+      </inertial>
+    </link>
+
+    <!-- IMU를 지정한 부모 링크에 고정 -->
+    <joint name="imu_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="imu_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+    <!-- RPLIDAR C1: 지름 55.6 mm, 높이 41.3 mm로 단순화 -->
+  <xacro:macro name="lidar" params="parent x y z">
+    <link name="laser_frame">
+      <!-- 링크 원점은 스캔 평면, 본체 중심은 그보다 아래 -->
+      <visual>
+        <origin xyz="0 0 -0.01935" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.0278" length="0.0413"/>
+        </geometry>
+        <material name="lidar_dark_gray">
+          <color rgba="0.15 0.15 0.15 1.0"/>
+        </material>
+      </visual>
+
+      <collision>
+        <origin xyz="0 0 -0.01935" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.0278" length="0.0413"/>
+        </geometry>
+      </collision>
+
+      <!-- 균일한 원통으로 근사: 질량 110 g -->
+      <inertial>
+        <origin xyz="0 0 -0.01935" rpy="0 0 0"/>
+        <mass value="0.110"/>
+        <inertia
+          ixx="3.68886e-5" ixy="0" ixz="0"
+          iyy="3.68886e-5" iyz="0"
+          izz="4.25062e-5"/>
+      </inertial>
+    </link>
+
+    <!-- 스캔 기준 좌표계를 차체에 고정 -->
+    <joint name="lidar_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="laser_frame"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- 2축 팬·틸트 카메라 -->
+  <xacro:macro name="camera" params="parent x y z">
+
+    <!-- 카메라 장착 베이스: 임시 형상 40 × 40 × 16 mm -->
+    <link name="camera_mount_link">
+      <visual>
+        <origin xyz="0 0 0.008" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.040 0.040 0.016"/>
+        </geometry>
+        <material name="camera_base_gray">
+          <color rgba="0.25 0.25 0.25 1.0"/>
+        </material>
+      </visual>
+
+      <collision>
+        <origin xyz="0 0 0.008" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.040 0.040 0.016"/>
+        </geometry>
+      </collision>
+
+      <!-- 임시 질량 20 g, 균일한 직육면체로 근사 -->
+      <inertial>
+        <origin xyz="0 0 0.008" rpy="0 0 0"/>
+        <mass value="0.020"/>
+        <inertia
+          ixx="3.09333e-6" ixy="0" ixz="0"
+          iyy="3.09333e-6" iyz="0"
+          izz="5.33333e-6"/>
+      </inertial>
+    </link>
+
+    <!-- 상판에 카메라 장착 기준점을 고정 -->
+    <joint name="camera_mount_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="camera_mount_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- 팬 회전부: 임시 형상 40 × 40 × 30 mm -->
+    <link name="camera_pan_link">
+      <visual>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.040 0.040 0.030"/>
+        </geometry>
+        <material name="camera_pan_gray">
+          <color rgba="0.45 0.45 0.45 1.0"/>
+        </material>
+      </visual>
+
+      <collision>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.040 0.040 0.030"/>
+        </geometry>
+      </collision>
+
+      <!-- 임시 질량 30 g, 균일한 직육면체로 근사 -->
+      <inertial>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <mass value="0.030"/>
+        <inertia
+          ixx="6.25e-6" ixy="0" ixz="0"
+          iyy="6.25e-6" iyz="0"
+          izz="8.0e-6"/>
+      </inertial>
+    </link>
+
+    <!-- 팬 관절: 장착 기준점보다 16 mm 위에서 Z축 회전 -->
+    <joint name="camera_pan_joint" type="revolute">
+      <parent link="camera_mount_link"/>
+      <child link="camera_pan_link"/>
+
+      <origin xyz="0 0 0.016" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+
+      <!-- 모델 작성용 임시 제한값: 실제 서보 사양 확인 후 수정 -->
+      <limit
+        lower="-1.5708"
+        upper="1.5708"
+        effort="0.5"
+        velocity="1.0"/>
+    </joint>
+
+    <!-- 틸트 회전부와 카메라: 임시 형상 30 × 40 × 29 mm -->
+    <link name="camera_tilt_link">
+      <visual>
+        <origin xyz="0 0 0.0145" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.030 0.040 0.029"/>
+        </geometry>
+        <material name="camera_body_black">
+          <color rgba="0.08 0.08 0.08 1.0"/>
+        </material>
+      </visual>
+
+      <collision>
+        <origin xyz="0 0 0.0145" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.030 0.040 0.029"/>
+        </geometry>
+      </collision>
+
+      <!-- 임시 질량 40 g, 균일한 직육면체로 근사 -->
+      <inertial>
+        <origin xyz="0 0 0.0145" rpy="0 0 0"/>
+        <mass value="0.040"/>
+        <inertia
+          ixx="8.13667e-6" ixy="0" ixz="0"
+          iyy="5.80333e-6" iyz="0"
+          izz="8.33333e-6"/>
+      </inertial>
+    </link>
+
+    <!-- 틸트 관절: 팬 회전 중심보다 30 mm 위에서 Y축 회전 -->
+    <joint name="camera_tilt_joint" type="revolute">
+      <parent link="camera_pan_link"/>
+      <child link="camera_tilt_link"/>
+
+      <origin xyz="0 0 0.030" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+
+      <!-- 모델 작성용 임시 제한값: 실제 서보 사양 확인 후 수정 -->
+      <limit
+        lower="-1.5708"
+        upper="1.5708"
+        effort="0.5"
+        velocity="1.0"/>
+    </joint>
+
+    <!-- 카메라 광학 기준 좌표계 -->
+    <link name="camera_optical_frame"/>
+
+    <!-- 렌즈 좌표계를 틸트 회전부에 고정 -->
+    <joint name="camera_optical_joint" type="fixed">
+      <parent link="camera_tilt_link"/>
+      <child link="camera_optical_frame"/>
+
+      <origin
+        xyz="0.015 0 0.0145"
+        rpy="${-pi/2} 0 ${-pi/2}"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

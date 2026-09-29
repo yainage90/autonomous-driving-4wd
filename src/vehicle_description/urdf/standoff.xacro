@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- 황동 지지대 하나: 지름 5 mm, 길이 50 mm -->
+  <xacro:macro name="standoff" params="x y">
+    <visual>
+      <origin xyz="${x} ${y} 0.047" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.0025" length="0.050"/>
+      </geometry>
+      <material name="brass">
+        <color rgba="0.75 0.55 0.20 1.0"/>
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="${x} ${y} 0.047" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.0025" length="0.050"/>
+      </geometry>
+    </collision>
+  </xacro:macro>
+
+</robot>

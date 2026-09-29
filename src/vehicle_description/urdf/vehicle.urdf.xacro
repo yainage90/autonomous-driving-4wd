@@ -1,4 +1,118 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="vehicle_4wd">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="vehicle">
+
+  <xacro:property name="wheel_radius" value="0.0325"/>
+  <xacro:include filename="wheel.xacro"/>
+  <xacro:include filename="standoff.xacro"/>
+  <xacro:include filename="sensors.xacro"/>
+
+  <!-- 바닥 접지면에 놓이는 기준 좌표계 -->
+  <link name="base_footprint"/>
+
+  <!-- 차량 중심의 바퀴 회전축 높이에 놓이는 기준 좌표계 -->
   <link name="base_link"/>
+
+  <!-- 바닥 기준에서 바퀴 반경만큼 위로 base_link를 고정 -->
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- 섀시 -->
+  <link name="chassis_link">
+
+    <!-- 섀시 하판 (Lower Plate): 228 × 110 × 2 mm -->
+    <visual>
+      <origin xyz="0 0 0.021" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.228 0.110 0.002"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.021" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.228 0.110 0.002"/>
+      </geometry>
+    </collision>
+
+    <!-- 섀시 상판 (Upper Plate): 228 × 148 × 2 mm -->
+    <visual>
+      <origin xyz="0 0 0.073" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.228 0.148 0.002"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.073" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.228 0.148 0.002"/>
+      </geometry>
+    </collision>
+
+    <!-- 배터리팩: 68 × 56 × 38 mm -->
+    <visual>
+      <origin xyz="0 0 0.041" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.068 0.056 0.038"/>
+      </geometry>
+      <material name="battery_black">
+        <color rgba="0.08 0.08 0.08 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.041" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.068 0.056 0.038"/>
+      </geometry>
+    </collision>
+
+    <!-- 황동 지지대 6개: X·Y는 실제 체결 구멍 확인 전 임시 좌표 -->
+    <xacro:standoff x="0.100"  y="0.045"/>
+    <xacro:standoff x="0.100"  y="-0.045"/>
+    <xacro:standoff x="0.000"  y="0.045"/>
+    <xacro:standoff x="0.000"  y="-0.045"/>
+    <xacro:standoff x="-0.100" y="0.045"/>
+    <xacro:standoff x="-0.100" y="-0.045"/>
+
+    <inertial>
+      <origin xyz="0 0 0.047" rpy="0 0 0"/>
+      <mass value="1.585"/>
+      <inertia
+        ixx="0.00354" ixy="0" ixz="0"
+        iyy="0.00751" iyz="0"
+        izz="0.00976"/>
+    </inertial>
+
+  </link>
+
+  <!-- 섀시를 base_link에 고정 -->
+  <joint name="base_to_chassis" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- 바퀴 4개 -->
+  <xacro:wheel name="front_left"  x="0.065"  y="0.075"/>
+  <xacro:wheel name="front_right" x="0.065"  y="-0.075"/>
+  <xacro:wheel name="rear_left"   x="-0.065" y="0.075"/>
+  <xacro:wheel name="rear_right"  x="-0.065" y="-0.075"/>
+
+  <!-- IMU: 상판 후방 50 mm에 IMU 장착 -->
+  <xacro:imu parent="base_link" x="-0.050" y="0" z="0.074"/>
+
+  <!-- 라이다 스캔 평면: 차체 중심보다 앞쪽 30 mm -->
+  <xacro:lidar parent="base_link" x="0.030" y="0" z="0.114"/>
+
+  <!-- 상판 전방 95 mm에 팬·틸트 카메라 조립 -->
+  <xacro:camera parent="base_link" x="0.095" y="0" z="0.074"/>
+
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>/joint_states</topic>
+    </plugin>
+  </gazebo>
+
 </robot>

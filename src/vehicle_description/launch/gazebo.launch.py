@@ -22,7 +22,21 @@ def generate_launch_description():
     robot_state_publisher_node = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
-        parameters=[{'robot_description': robot_description}]
+        parameters=[{
+            'robot_description': robot_description,
+            'use_sim_time': True,
+        }]
+    )
+
+    # Gazebo의 관절 상태와 시뮬레이션 시계를 ROS 2에 전달
+    bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
+            '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+        ],
+        output='screen'
     )
 
     # Gazebo Harmonic 실행 (empty.sdf 월드)
@@ -47,6 +61,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         robot_state_publisher_node,
+        bridge,
         gazebo,
         spawn_entity
     ])
