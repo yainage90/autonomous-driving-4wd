@@ -9,8 +9,7 @@
 
 ```bash
 source .venv/bin/activate
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash  # 워크스페이스를 빌드한 뒤
+source install/local_setup.bash  # 워크스페이스를 빌드한 뒤
 ```
 
 ## 빌드 및 테스트
@@ -39,11 +38,12 @@ colcon test-result --verbose
 
 ## 변경 원칙
 
-- 기존 사용자 변경 사항을 임의로 되돌리지 않는다.
+- 코드 및 설정 파일 수정은 사용자의 명시적인 요청이 있을 경우에만 한다.
 - 요청과 무관한 대규모 포맷팅이나 리팩터링은 하지 않는다.
-- 새 패키지, 노드, launch 파일을 추가하면 실행 방법을 README에 반영한다.
+
 
 ## 참고 문서
 - ros2 jazzy docs: https://docs.ros.org/en/jazzy/Concepts/Advanced/About-Build-System.html
 - nav2 jazzy docs: https://docs.nav2.org/jazzy/
 - gazebo harmonic docs: https://gazebosim.org/docs/harmonic/getstarted/
+
