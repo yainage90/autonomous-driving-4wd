@@ -84,12 +84,23 @@
   <!-- 2축 팬·틸트 카메라 -->
   <xacro:macro name="camera" params="parent x y z">
 
-    <!-- 카메라 장착 베이스: 임시 형상 40 × 40 × 16 mm -->
+    <!-- Figure-2 매립 설치. z는 상판 윗면.
+         scratch/camera_2dof_ptz_dimensions.png: 상판 위 62 mm, 아래 16 mm.
+         scratch/camera_servo_dimensions.png: 서보 몸체 23 × 12 × 23.2 mm.
+         전체 높이는 도면에 맞추되, 브래킷 형상과 축/렌즈 위치는 근사값이다.
+         상판 개구부는 섀시의 단순 박스 형상에 아직 표현하지 않는다. -->
+    <xacro:property name="camera_above_plate" value="0.062"/>
+    <xacro:property name="camera_insertion_depth" value="0.016"/>
+    <xacro:property name="camera_servo_height" value="0.0232"/>
+    <xacro:property name="camera_pan_height" value="${camera_servo_height - camera_insertion_depth}"/>
+    <xacro:property name="camera_bracket_height" value="${camera_above_plate - camera_pan_height - 0.029}"/>
+
+    <!-- 고정된 팬 서보 몸체: 상판 아래 16 mm부터 위 7.2 mm까지 -->
     <link name="camera_mount_link">
       <visual>
-        <origin xyz="0 0 0.008" rpy="0 0 0"/>
+        <origin xyz="0 0 ${camera_servo_height / 2 - camera_insertion_depth}" rpy="0 0 0"/>
         <geometry>
-          <box size="0.040 0.040 0.016"/>
+          <box size="0.023 0.012 ${camera_servo_height}"/>
         </geometry>
         <material name="camera_base_gray">
           <color rgba="0.25 0.25 0.25 1.0"/>
@@ -97,20 +108,20 @@
       </visual>
 
       <collision>
-        <origin xyz="0 0 0.008" rpy="0 0 0"/>
+        <origin xyz="0 0 ${camera_servo_height / 2 - camera_insertion_depth}" rpy="0 0 0"/>
         <geometry>
-          <box size="0.040 0.040 0.016"/>
+          <box size="0.023 0.012 ${camera_servo_height}"/>
         </geometry>
       </collision>
 
       <!-- 임시 질량 20 g, 균일한 직육면체로 근사 -->
       <inertial>
-        <origin xyz="0 0 0.008" rpy="0 0 0"/>
+        <origin xyz="0 0 ${camera_servo_height / 2 - camera_insertion_depth}" rpy="0 0 0"/>
         <mass value="0.020"/>
         <inertia
-          ixx="3.09333e-6" ixy="0" ixz="0"
-          iyy="3.09333e-6" iyz="0"
-          izz="5.33333e-6"/>
+          ixx="${0.020 * (0.012**2 + camera_servo_height**2) / 12}" ixy="0" ixz="0"
+          iyy="${0.020 * (0.023**2 + camera_servo_height**2) / 12}" iyz="0"
+          izz="${0.020 * (0.023**2 + 0.012**2) / 12}"/>
       </inertial>
     </link>
 
@@ -121,12 +132,12 @@
       <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
     </joint>
 
-    <!-- 팬 회전부: 임시 형상 40 × 40 × 30 mm -->
+    <!-- 팬 회전부: 근사 브래킷 40 × 40 × 25.8 mm -->
     <link name="camera_pan_link">
       <visual>
-        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <origin xyz="0 0 ${camera_bracket_height / 2}" rpy="0 0 0"/>
         <geometry>
-          <box size="0.040 0.040 0.030"/>
+          <box size="0.040 0.040 ${camera_bracket_height}"/>
         </geometry>
         <material name="camera_pan_gray">
           <color rgba="0.45 0.45 0.45 1.0"/>
@@ -134,29 +145,29 @@
       </visual>
 
       <collision>
-        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <origin xyz="0 0 ${camera_bracket_height / 2}" rpy="0 0 0"/>
         <geometry>
-          <box size="0.040 0.040 0.030"/>
+          <box size="0.040 0.040 ${camera_bracket_height}"/>
         </geometry>
       </collision>
 
       <!-- 임시 질량 30 g, 균일한 직육면체로 근사 -->
       <inertial>
-        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <origin xyz="0 0 ${camera_bracket_height / 2}" rpy="0 0 0"/>
         <mass value="0.030"/>
         <inertia
-          ixx="6.25e-6" ixy="0" ixz="0"
-          iyy="6.25e-6" iyz="0"
+          ixx="${0.030 * (0.040**2 + camera_bracket_height**2) / 12}" ixy="0" ixz="0"
+          iyy="${0.030 * (0.040**2 + camera_bracket_height**2) / 12}" iyz="0"
           izz="8.0e-6"/>
       </inertial>
     </link>
 
-    <!-- 팬 관절: 장착 기준점보다 16 mm 위에서 Z축 회전 -->
+    <!-- 팬 관절: 서보 몸체 상단(상판 위 7.2 mm)을 Z축 회전 기준으로 근사 -->
     <joint name="camera_pan_joint" type="revolute">
       <parent link="camera_mount_link"/>
       <child link="camera_pan_link"/>
 
-      <origin xyz="0 0 0.016" rpy="0 0 0"/>
+      <origin xyz="0 0 ${camera_pan_height}" rpy="0 0 0"/>
       <axis xyz="0 0 1"/>
 
       <!-- 모델 작성용 임시 제한값: 실제 서보 사양 확인 후 수정 -->
@@ -197,12 +208,12 @@
       </inertial>
     </link>
 
-    <!-- 틸트 관절: 팬 회전 중심보다 30 mm 위에서 Y축 회전 -->
+    <!-- 틸트 관절: 전체 높이 62 mm에 맞춘 근사 위치(상판 위 33 mm)에서 Y축 회전 -->
     <joint name="camera_tilt_joint" type="revolute">
       <parent link="camera_pan_link"/>
       <child link="camera_tilt_link"/>
 
-      <origin xyz="0 0 0.030" rpy="0 0 0"/>
+      <origin xyz="0 0 ${camera_bracket_height}" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
 
       <!-- 모델 작성용 임시 제한값: 실제 서보 사양 확인 후 수정 -->
@@ -216,7 +227,7 @@
     <!-- 카메라 광학 기준 좌표계 -->
     <link name="camera_optical_frame"/>
 
-    <!-- 렌즈 좌표계를 틸트 회전부에 고정 -->
+    <!-- 렌즈 좌표계를 틸트 회전부에 고정: 중립 시 상판 위 47.5 mm (근사) -->
     <joint name="camera_optical_joint" type="fixed">
       <parent link="camera_tilt_link"/>
       <child link="camera_optical_frame"/>
