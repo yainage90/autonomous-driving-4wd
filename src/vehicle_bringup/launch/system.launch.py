@@ -23,11 +23,16 @@ def generate_launch_description():
         )
     )
 
-
+    visualization = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            launch_file_path=f'{description_share}/launch/rviz.launch.py'
+        )
+    )
 
     return LaunchDescription(
         [
             simulation,
+            visualization,
             command_guard,
         ]
     )
