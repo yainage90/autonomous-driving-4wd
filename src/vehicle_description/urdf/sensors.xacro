@@ -170,6 +170,9 @@
       <origin xyz="0 0 ${camera_pan_height}" rpy="0 0 0"/>
       <axis xyz="0 0 1"/>
 
+      <!-- 수동 회전 저항의 초기값: 마찰 N·m, 감쇠 N·m·s/rad -->
+      <dynamics friction="0.005" damping="0.002"/>
+
       <!-- 모델 작성용 임시 제한값: 실제 서보 사양 확인 후 수정 -->
       <limit
         lower="-1.5708"
@@ -215,6 +218,9 @@
 
       <origin xyz="0 0 ${camera_bracket_height}" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
+
+      <!-- 수동 회전 저항의 초기값: 마찰 N·m, 감쇠 N·m·s/rad -->
+      <dynamics friction="0.005" damping="0.002"/>
 
       <!-- 모델 작성용 임시 제한값: 실제 서보 사양 확인 후 수정 -->
       <limit
