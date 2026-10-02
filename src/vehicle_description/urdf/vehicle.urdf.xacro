@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="vehicle">
 
-  <!-- four-wheel-drvie-main-body.stl 기준, 단위 m. 원본 -Z가 전방, 네 바퀴 축의 중심이 원점. -->
+  <!-- 4wd_platform.stl에서 분리한 메시 기준, 단위 m. 원본 -Z가 전방, 네 바퀴 축의 중심이 원점. -->
   <xacro:property name="wheel_radius" value="0.0335"/>
   <xacro:property name="wheel_width" value="0.027"/>
   <xacro:property name="wheel_separation" value="0.1203"/>

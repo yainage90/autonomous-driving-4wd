@@ -1,9 +1,11 @@
 # 섀시 메시
 
-`four-wheel-drvie-main-body.stl`은 면 방향이 수정된 원본 ASCII STL이다.
+`4wd_platform.stl`은 전체 부품을 합친 binary STL이며 부품 분리의 입력 파일이다.
 URDF는 여기서 분리한 `chassis_body.stl`과 네 개의 `*_wheel.stl`을 사용한다.
 원본 삼각형 225,636개를 빠짐없이 분배하고 binary STL로 저장한다.
 파생 파일 합계는 약 11.28 MB로, 삼각형 수를 줄이는 단순화는 하지 않았다.
+이 입력에서 재생성한 다섯 메시의 삼각형 정점 좌표는 기존 파생 STL과 동일하다.
+따라서 URDF의 메시 경로, 치수와 바퀴 조인트 위치도 그대로 사용할 수 있다.
 
 ## 좌표와 치수
 
@@ -45,9 +47,9 @@ STL에는 단위/차량 전방 정보가 없으므로 다음을 모델링 가정
 
 ## 재생성
 
-원본 STL은 저장소에 포함하지 않는다. 재생성하려면 면 방향이 수정된 원본을
-`src/vehicle_description/meshes/four-wheel-drvie-main-body.stl`에 준비하거나
-`--source /path/to/source.stl`로 경로를 지정한다.
+기본 입력은 `src/vehicle_description/meshes/4wd_platform.stl`이다.
+다른 입력은 `--source /path/to/source.stl`로 지정할 수 있으며,
+ASCII STL과 binary STL 모두 지원한다.
 워크스페이스 루트에서 Python 3.12 표준 라이브러리만으로 실행할 수 있다.
 
 ```bash

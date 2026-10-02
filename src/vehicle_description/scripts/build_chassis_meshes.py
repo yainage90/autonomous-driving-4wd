@@ -1,16 +1,35 @@
 #!/usr/bin/env python3
-"""Split the source ASCII STL into ROS-aligned binary visual meshes (stdlib only)."""
+"""Split an ASCII or binary STL into ROS-aligned visual meshes (stdlib only)."""
 
 import argparse
 from array import array
 from collections import defaultdict
-from math import sqrt
+from math import isfinite, sqrt
 from pathlib import Path
 import struct
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
 AXLE_MIDPOINT = (0.0, 0.03453, -0.011)
+
+
+def read_vertices(path):
+    """Detect binary STL by its record count, including headers starting with solid."""
+    with path.open('rb') as source:
+        header = source.read(84)
+        if len(header) == 84:
+            count = struct.unpack_from('<I', header, 80)[0]
+            if path.stat().st_size == 84 + 50 * count:
+                for _ in range(count):
+                    record = struct.unpack('<12fH', source.read(50))
+                    for offset in (3, 6, 9):
+                        yield record[offset:offset + 3]
+                return
+    with path.open() as source:
+        for line in source:
+            fields = line.split()
+            if fields and fields[0] == 'vertex':
+                yield tuple(float(value) for value in fields[1:])
 
 
 def read_components(path):
@@ -27,28 +46,23 @@ def read_components(path):
             index = parents[index]
         return index
 
-    with path.open() as source:
-        for line in source:
-            fields = line.split()
-            if not fields or fields[0] != 'vertex':
-                continue
-            point = tuple(float(value) for value in fields[1:])
-            if len(point) != 3:
-                raise ValueError('Expected three coordinates per vertex')
-            coordinates.extend(point)
-            key = tuple(round(value, 8) for value in point)
-            if key not in vertex_ids:
-                vertex_ids[key] = len(parents)
-                parents.append(len(parents))
-            pending.append(vertex_ids[key])
-            if len(pending) == 3:
-                first = root(pending[0])
-                for index in pending[1:]:
-                    parents[root(index)] = first
-                triangles.append(pending[0])
-                pending = []
+    for point in read_vertices(path):
+        if len(point) != 3 or not all(isfinite(value) for value in point):
+            raise ValueError('Expected three finite coordinates per vertex')
+        coordinates.extend(point)
+        key = tuple(round(value, 8) for value in point)
+        if key not in vertex_ids:
+            vertex_ids[key] = len(parents)
+            parents.append(len(parents))
+        pending.append(vertex_ids[key])
+        if len(pending) == 3:
+            first = root(pending[0])
+            for index in pending[1:]:
+                parents[root(index)] = first
+            triangles.append(pending[0])
+            pending = []
     if pending or not triangles:
-        raise ValueError('Expected complete triangles in an ASCII STL')
+        raise ValueError('Expected complete triangles in an STL')
 
     groups = defaultdict(list)
     for index, vertex in enumerate(triangles):
@@ -92,7 +106,7 @@ def write_mesh(path, coordinates, triangles, origin):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path,
-                        default=PACKAGE / 'meshes/four-wheel-drvie-main-body.stl')
+                        default=PACKAGE / 'meshes/4wd_platform.stl')
     parser.add_argument('--output-dir', type=Path, default=PACKAGE / 'meshes')
     args = parser.parse_args()
     coordinates, groups = read_components(args.source)
