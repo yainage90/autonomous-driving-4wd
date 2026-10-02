@@ -2,28 +2,32 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <!-- 바퀴 하나의 링크와 조인트를 만드는 매크로 -->
   <xacro:macro name="wheel" params="name x y">
+    <!-- 기존 추정 질량 유지, 관성은 수정된 치수의 균일 원통으로 근사. -->
+    <xacro:property name="wheel_mass" value="0.040"/>
     <link name="${name}_wheel_link">
       <visual>
-        <origin xyz="0 0 0" rpy="1.5708 0 0"/>
         <geometry>
-          <cylinder radius="${wheel_radius}" length="0.026"/>
+          <mesh filename="package://vehicle_description/meshes/${name}_wheel.stl"/>
         </geometry>
+        <material name="wheel_dark_gray">
+          <color rgba="0.12 0.12 0.12 1"/>
+        </material>
       </visual>
 
       <collision>
-        <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+        <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
         <geometry>
-          <cylinder radius="${wheel_radius}" length="0.026"/>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
         </geometry>
       </collision>
 
       <inertial>
         <origin xyz="0 0 0" rpy="0 0 0"/>
-        <mass value="0.040"/>
+        <mass value="${wheel_mass}"/>
         <inertia
-          ixx="0.0000128" ixy="0" ixz="0"
-          iyy="0.0000211" iyz="0"
-          izz="0.0000128"/>
+          ixx="${wheel_mass * (3 * wheel_radius**2 + wheel_width**2) / 12}" ixy="0" ixz="0"
+          iyy="${wheel_mass * wheel_radius**2 / 2}" iyz="0"
+          izz="${wheel_mass * (3 * wheel_radius**2 + wheel_width**2) / 12}"/>
       </inertial>
     </link>
 

@@ -14,5 +14,6 @@
   <exec_depend>rviz2</exec_depend>
   <export>
     <build_type>ament_python</build_type>
+    <gazebo_ros gazebo_model_path="${prefix}/../"/>
   </export>
 </package>

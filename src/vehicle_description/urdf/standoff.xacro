@@ -2,16 +2,18 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <!-- 원통형 지지대 매크로 -->
-  <xacro:macro name="standoff" params="x y z length">
-    <visual>
-      <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
-      <geometry>
-        <cylinder radius="0.0025" length="${length}"/>
-      </geometry>
-      <material name="brass">
-        <color rgba="0.75 0.55 0.20 1.0"/>
-      </material>
-    </visual>
+  <xacro:macro name="standoff" params="x y z length show_visual:=true">
+    <xacro:if value="${show_visual}">
+      <visual>
+        <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.0025" length="${length}"/>
+        </geometry>
+        <material name="brass">
+          <color rgba="0.75 0.55 0.20 1.0"/>
+        </material>
+      </visual>
+    </xacro:if>
 
     <collision>
       <origin xyz="${x} ${y} ${z}" rpy="0 0 0"/>

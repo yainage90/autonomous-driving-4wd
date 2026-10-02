@@ -1,7 +1,17 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="vehicle">
 
-  <xacro:property name="wheel_radius" value="0.0325"/>
+  <!-- four-wheel-drvie-main-body.stl 기준, 단위 m. 원본 -Z가 전방, 네 바퀴 축의 중심이 원점. -->
+  <xacro:property name="wheel_radius" value="0.0335"/>
+  <xacro:property name="wheel_width" value="0.027"/>
+  <xacro:property name="wheel_separation" value="0.1203"/>
+  <xacro:property name="wheelbase" value="0.0994"/>
+  <xacro:property name="chassis_center_x" value="-0.006"/>
+  <xacro:property name="lower_plate_z" value="0.02565"/>
+  <xacro:property name="upper_plate_z" value="0.06765"/>
+  <xacro:property name="plate_thickness" value="0.002"/>
+  <xacro:property name="lower_plate_top" value="${lower_plate_z + plate_thickness / 2}"/>
+  <xacro:property name="upper_plate_top" value="${upper_plate_z + plate_thickness / 2}"/>
   <xacro:include filename="wheel.xacro"/>
   <xacro:include filename="standoff.xacro"/>
   <xacro:include filename="sensors.xacro"/>
@@ -24,65 +34,83 @@
   <!-- 섀시 -->
   <link name="chassis_link">
 
-    <!-- 섀시 하판 (Lower Plate): 228 × 110 × 2 mm -->
+    <!-- 상·하판, 지지대, 모터와 체결 부품. 바퀴/허브는 회전 링크에 분리. -->
     <visual>
-      <origin xyz="0 0 0.021" rpy="0 0 0"/>
       <geometry>
-        <box size="0.228 0.110 0.002"/>
+        <mesh filename="package://vehicle_description/meshes/chassis_body.stl"/>
       </geometry>
+      <material name="chassis_gray">
+        <color rgba="0.55 0.55 0.55 1"/>
+      </material>
     </visual>
+
+    <!-- 충돌 계산은 상·하판과 모터의 단순 형상으로 근사. -->
     <collision>
-      <origin xyz="0 0 0.021" rpy="0 0 0"/>
+      <origin xyz="${chassis_center_x} 0 ${lower_plate_z}" rpy="0 0 0"/>
       <geometry>
-        <box size="0.228 0.110 0.002"/>
+        <box size="0.228 0.110 ${plate_thickness}"/>
       </geometry>
     </collision>
 
     <!-- 섀시 상판 (Upper Plate): 228 × 148 × 2 mm -->
-    <visual>
-      <origin xyz="0 0 0.073" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.228 0.148 0.002"/>
-      </geometry>
-    </visual>
     <collision>
-      <origin xyz="0 0 0.073" rpy="0 0 0"/>
+      <origin xyz="${chassis_center_x} 0 ${upper_plate_z}" rpy="0 0 0"/>
       <geometry>
-        <box size="0.228 0.148 0.002"/>
+        <box size="0.228 0.148 ${plate_thickness}"/>
       </geometry>
     </collision>
 
-    <!-- 황동 지지대 6개 (섀시 상/하판 고정용, 길이 50mm) -->
-    <xacro:standoff x="0.100"  y="0.045"  z="0.047" length="0.050"/>
-    <xacro:standoff x="0.100"  y="-0.045" z="0.047" length="0.050"/>
-    <xacro:standoff x="0.000"  y="0.045"  z="0.047" length="0.050"/>
-    <xacro:standoff x="0.000"  y="-0.045" z="0.047" length="0.050"/>
-    <xacro:standoff x="-0.100" y="0.045"  z="0.047" length="0.050"/>
-    <xacro:standoff x="-0.100" y="-0.045" z="0.047" length="0.050"/>
+    <!-- 모터/기어박스 외접 박스. 축과 작은 체결 부품의 충돌 형상은 생략. -->
+    <collision name="front_left_motor">
+      <origin xyz="0.069 0.02035 0"/>
+      <geometry><box size="0.0644 0.0671 0.038"/></geometry>
+    </collision>
+    <collision name="front_right_motor">
+      <origin xyz="0.0304 -0.02035 0"/>
+      <geometry><box size="0.0644 0.0671 0.038"/></geometry>
+    </collision>
+    <collision name="rear_left_motor">
+      <origin xyz="-0.0304 0.02035 0"/>
+      <geometry><box size="0.0644 0.0671 0.038"/></geometry>
+    </collision>
+    <collision name="rear_right_motor">
+      <origin xyz="-0.069 -0.02035 0"/>
+      <geometry><box size="0.06443 0.0671 0.03808"/></geometry>
+    </collision>
 
-    <!-- 라이다용 50mm M2.5 스페이서 4개 (상판 Z=0.074 부터 Z=0.124 까지, 중심 0.099) -->
+    <!-- STL 지지대 위치. 판 사이 40 mm 구간의 충돌만 추가하며 외형은 메시 사용. -->
+    <xacro:standoff x="0.096"  y="0.036"  z="${(lower_plate_z + upper_plate_z) / 2}" length="0.040" show_visual="false"/>
+    <xacro:standoff x="0.096"  y="-0.036" z="${(lower_plate_z + upper_plate_z) / 2}" length="0.040" show_visual="false"/>
+    <xacro:standoff x="0.000"  y="0.050"  z="${(lower_plate_z + upper_plate_z) / 2}" length="0.040" show_visual="false"/>
+    <xacro:standoff x="0.000"  y="-0.050" z="${(lower_plate_z + upper_plate_z) / 2}" length="0.040" show_visual="false"/>
+    <xacro:standoff x="-0.100" y="0.036"  z="${(lower_plate_z + upper_plate_z) / 2}" length="0.040" show_visual="false"/>
+    <xacro:standoff x="-0.100" y="-0.036" z="${(lower_plate_z + upper_plate_z) / 2}" length="0.040" show_visual="false"/>
+
+    <!-- 추가 장착물의 XY 배치는 기존 추정값. 높이는 STL 상판 윗면에 연동. -->
+    <!-- 라이다용 50mm M2.5 스페이서 4개 -->
     <!-- 라이다 중심(x=0.030, y=0.000) 기준으로 가로세로 약 30mm 간격(±0.015)으로 배치 -->
-    <xacro:standoff x="0.045"  y="0.015"  z="0.099" length="0.050"/>
-    <xacro:standoff x="0.045"  y="-0.015" z="0.099" length="0.050"/>
-    <xacro:standoff x="0.015"  y="0.015"  z="0.099" length="0.050"/>
-    <xacro:standoff x="0.015"  y="-0.015" z="0.099" length="0.050"/>
+    <xacro:standoff x="0.045"  y="0.015"  z="${upper_plate_top + 0.025}" length="0.050"/>
+    <xacro:standoff x="0.045"  y="-0.015" z="${upper_plate_top + 0.025}" length="0.050"/>
+    <xacro:standoff x="0.015"  y="0.015"  z="${upper_plate_top + 0.025}" length="0.050"/>
+    <xacro:standoff x="0.015"  y="-0.015" z="${upper_plate_top + 0.025}" length="0.050"/>
 
-    <!-- 라즈베리파이5용 20mm M2.5 스페이서 4개 (상판 Z=0.074 부터 Z=0.094 까지, 중심 0.084) -->
+    <!-- 라즈베리파이5용 20mm M2.5 스페이서 4개 -->
     <!-- 라즈베리파이 중심(x=-0.060, y=0.040) 기준으로 가로 58mm(±0.029), 세로 49mm(±0.0245) 간격 -->
-    <xacro:standoff x="-0.031" y="0.0645" z="0.084" length="0.020"/>
-    <xacro:standoff x="-0.031" y="0.0155" z="0.084" length="0.020"/>
-    <xacro:standoff x="-0.089" y="0.0645" z="0.084" length="0.020"/>
-    <xacro:standoff x="-0.089" y="0.0155" z="0.084" length="0.020"/>
+    <xacro:standoff x="-0.031" y="0.0645" z="${upper_plate_top + 0.010}" length="0.020"/>
+    <xacro:standoff x="-0.031" y="0.0155" z="${upper_plate_top + 0.010}" length="0.020"/>
+    <xacro:standoff x="-0.089" y="0.0645" z="${upper_plate_top + 0.010}" length="0.020"/>
+    <xacro:standoff x="-0.089" y="0.0155" z="${upper_plate_top + 0.010}" length="0.020"/>
 
-    <!-- ESP32 확장보드용 20mm 스페이서 4개 (상판 Z=0.074 부터 Z=0.094 까지, 중심 0.084) -->
+    <!-- ESP32 확장보드용 20mm 스페이서 4개 -->
     <!-- 보드 중심(x=-0.060, y=-0.040) 기준으로 대략적인 4모서리(±0.035, ±0.023)에 배치 -->
-    <xacro:standoff x="-0.025" y="-0.017" z="0.084" length="0.020"/>
-    <xacro:standoff x="-0.025" y="-0.063" z="0.084" length="0.020"/>
-    <xacro:standoff x="-0.095" y="-0.017" z="0.084" length="0.020"/>
-    <xacro:standoff x="-0.095" y="-0.063" z="0.084" length="0.020"/>
+    <xacro:standoff x="-0.025" y="-0.017" z="${upper_plate_top + 0.010}" length="0.020"/>
+    <xacro:standoff x="-0.025" y="-0.063" z="${upper_plate_top + 0.010}" length="0.020"/>
+    <xacro:standoff x="-0.095" y="-0.017" z="${upper_plate_top + 0.010}" length="0.020"/>
+    <xacro:standoff x="-0.095" y="-0.063" z="${upper_plate_top + 0.010}" length="0.020"/>
 
+    <!-- 질량/관성은 기존 추정값 유지. 무게중심은 판 사이 중심으로 근사. -->
     <inertial>
-      <origin xyz="0 0 0.047" rpy="0 0 0"/>
+      <origin xyz="${chassis_center_x} 0 ${(lower_plate_z + upper_plate_z) / 2}" rpy="0 0 0"/>
       <mass value="1.296"/>
       <inertia
         ixx="0.0028948" ixy="0" ixz="0"
@@ -129,29 +157,29 @@
   <joint name="chassis_to_battery" type="fixed">
     <parent link="chassis_link" />
     <child link="battery_link" />
-    <origin xyz="0 0 0.041" rpy="0 0 0" />
+    <origin xyz="0 0 ${lower_plate_top + 0.019}" rpy="0 0 0" />
   </joint>
 
   <!-- 바퀴 4개 -->
-  <xacro:wheel name="front_left"  x="0.065"  y="0.075"/>
-  <xacro:wheel name="front_right" x="0.065"  y="-0.075"/>
-  <xacro:wheel name="rear_left"   x="-0.065" y="0.075"/>
-  <xacro:wheel name="rear_right"  x="-0.065" y="-0.075"/>
+  <xacro:wheel name="front_left"  x="${wheelbase / 2}"  y="${wheel_separation / 2}"/>
+  <xacro:wheel name="front_right" x="${wheelbase / 2}"  y="${-wheel_separation / 2}"/>
+  <xacro:wheel name="rear_left"   x="${-wheelbase / 2}" y="${wheel_separation / 2}"/>
+  <xacro:wheel name="rear_right"  x="${-wheelbase / 2}" y="${-wheel_separation / 2}"/>
 
   <!-- IMU: 상판 좌측 전방 (10-axis IMU module 홀 위치)에 IMU 장착 -->
-  <xacro:imu parent="base_link" x="0.060" y="0.060" z="0.074"/>
+  <xacro:imu parent="base_link" x="0.060" y="0.060" z="${upper_plate_top}"/>
 
   <!-- 라이다 스캔 평면: 차체 중심보다 앞쪽 30 mm -->
-  <xacro:lidar parent="base_link" x="0.030" y="0" z="0.164"/>
+  <xacro:lidar parent="base_link" x="0.030" y="0" z="${upper_plate_top + 0.090}"/>
 
   <!-- 상판 전방 95 mm에 Figure-2 방식으로 카메라 매립: z는 상판 윗면, 위 62 / 아래 16 mm -->
-  <xacro:camera parent="base_link" x="0.095" y="0" z="0.074"/>
+  <xacro:camera parent="base_link" x="0.095" y="0" z="${upper_plate_top}"/>
 
   <!-- 상판 후방 좌측에 라즈베리파이 5 배치 (20mm 지지대 사용) -->
-  <xacro:raspberry_pi parent="base_link" x="-0.060" y="0.040" z="0.104"/>
+  <xacro:raspberry_pi parent="base_link" x="-0.060" y="0.040" z="${upper_plate_top + 0.030}"/>
 
   <!-- 상판 후방 우측에 ESP32 + 확장보드 배치 (20mm 지지대 사용) -->
-  <xacro:esp32_board parent="base_link" x="-0.060" y="-0.040" z="0.1015"/>
+  <xacro:esp32_board parent="base_link" x="-0.060" y="-0.040" z="${upper_plate_top + 0.0275}"/>
 
   
 
