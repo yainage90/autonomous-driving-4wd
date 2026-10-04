@@ -463,7 +463,7 @@ def test_mode_switch_stops_until_new_selected_input(
                 and mode_client.service_is_ready()
             ),
         )
-        assert connected, 'ト픽 또는 모드 서비스가 준비되지 않았습니다'
+        assert connected, '토픽 또는 모드 서비스가 준비되지 않았습니다'
 
         # 전환 전 모드를 선택하고 입력 발행자를 구분
         request_auto_mode(mode_client, executor, not target_auto)
