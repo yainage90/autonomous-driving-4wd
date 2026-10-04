@@ -1,16 +1,29 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command
+from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     pkg_name = 'vehicle_description'
     pkg_share = get_package_share_directory(pkg_name)
+
     ros_gz_sim_share = get_package_share_directory('ros_gz_sim')
+
+    simulation_share = get_package_share_directory('vehicle_simulation')
+
+    default_world = f'{simulation_share}/worlds/evaluation.sdf'
+
+    world_argument = DeclareLaunchArgument(
+        'world',
+        default_value=default_world,
+        description='Gazebo world file path',
+    )
+
+    world = LaunchConfiguration('world')
 
     # xacro file path
     xacro_file = os.path.join(pkg_share, 'urdf', 'vehicle.urdf.xacro')
@@ -47,7 +60,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(ros_gz_sim_share, 'launch', 'gz_sim.launch.py')
         ),
-        launch_arguments={'gz_args': '-r empty.sdf'}.items()
+        launch_arguments={'gz_args': ['-r "', world, '"']}.items()
     )
 
     # Gazebo에 로봇 모델 스폰 (Spawn)
@@ -57,12 +70,18 @@ def generate_launch_description():
         arguments=[
             '-topic', 'robot_description',
             '-name', 'vehicle',
-            '-z', '0.5'  # 지면에서 살짝 띄워서 스폰
+            '-x', '-2.0',
+            '-y', '0.0',
+            '-z', '0.02',
+            '-R', '0.0',
+            '-P', '0.0',
+            '-Y', '0.0',
         ],
         output='screen'
     )
 
     return LaunchDescription([
+        world_argument,
         robot_state_publisher_node,
         bridge,
         gazebo,
