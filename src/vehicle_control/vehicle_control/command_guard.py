@@ -1,7 +1,11 @@
 import math
-from geometry_msgs.msg import Twist
-from rclpy.node import Node
 import rclpy
+from rclpy.node import Node
+from rclpy.clock import Clock
+from rclpy.clock_type import ClockType
+
+from geometry_msgs.msg import Twist
+from std_srvs.srv import SetBool
 
 
 class CommandGuard(Node):
@@ -30,11 +34,28 @@ class CommandGuard(Node):
         self.declare_parameter('command_timeout_sec', 0.5)
         self.command_timeout_sec = self.get_parameter('command_timeout_sec').value
 
+        if (
+            not math.isfinite(self.command_timeout_sec) or self.command_timeout_sec <= 0.0
+        ):
+            raise ValueError('command_timeout_sec는 유한한 양수여야 합니다')
+
         self.last_command_time = None
-        self.timer = self.create_timer(0.05, self.check_timeout)
+        self.safety_clock = Clock(clock_type=ClockType.STEADY_TIME)
+        self.timer = self.create_timer(0.05, self.check_timeout, clock=self.safety_clock)
+
+        self.emergency_stop_active = False
+        self.emergency_stop_service = self.create_service(
+            SetBool,
+            'set_emergency_stop',
+            self.on_emergency_stop,
+        )
 
 
     def on_command(self, msg):
+        if self.emergency_stop_active:
+            self.cmd_pub.publish(Twist())
+            return
+
         values = (
             msg.linear.x,
             msg.linear.y,
@@ -50,7 +71,7 @@ class CommandGuard(Node):
             self.get_logger().warning('비정상 속도 명령을 거부하고 정지합니다')
             return
 
-        self.last_command_time = self.get_clock().now()
+        self.last_command_time = self.safety_clock.now()
 
         linear_speed = msg.linear.x
         if linear_speed > self.max_linear_speed_mps:
@@ -71,16 +92,38 @@ class CommandGuard(Node):
 
         self.cmd_pub.publish(msg)
 
+    def on_emergency_stop(self, request, response):
+        self.emergency_stop_active = request.data
+
+        self.last_command_time = None
+        self.cmd_pub.publish(Twist())
+
+        response.success = True
+
+        if self.emergency_stop_active:
+            response.message = '비상정지를 활성화했습니다'
+            self.get_logger().warning(response.message)
+        else:
+            response.message = '비상정지를 해제했습니다. 새 속도 명령을 기다립니다'
+            self.get_logger().info(response.message)
+        
+        return response
+
+
     def check_timeout(self):
+        if self.emergency_stop_active:
+            self.cmd_pub.publish(Twist())
+            return
+
         if self.last_command_time is None:
             self.cmd_pub.publish(Twist())
             return
 
-        elapsed = (self.get_clock().now() - self.last_command_time).nanoseconds / 1_000_000_000
-        if elapsed > self.command_timeout_sec:
+        elapsed = (self.safety_clock.now() - self.last_command_time).nanoseconds / 1_000_000_000
+        if elapsed >= self.command_timeout_sec:
+            self.last_command_time = None
             self.cmd_pub.publish(Twist())
-            return
-        
+            self.get_logger().warning('속도 명령 타임아웃으로 정지합니다')
 
 
 def main(args=None):
