@@ -1,4 +1,6 @@
 /**:
   ros__parameters:
     command_timeout_sec: 0.5
+    max_linear_speed_mps: 0.2
+    max_angular_speed_rps: 0.6
     default_speed_mps: 0.0
