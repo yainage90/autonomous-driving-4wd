@@ -18,10 +18,19 @@ class CommandGuard(Node):
             10,
         )
 
-        self.cmd_sub = self.create_subscription(
+        self.control_mode = 'manual'
+
+        self.cmd_sub_manual = self.create_subscription(
             Twist,
-            'cmd_vel_raw',
-            self.on_command,
+            'cmd_vel_manual',
+            self.on_command_manual,
+            10
+        )
+
+        self.cmd_sub_auto = self.create_subscription(
+            Twist,
+            'cmd_vel_auto',
+            self.on_command_auto,
             10
         )
 
@@ -49,6 +58,22 @@ class CommandGuard(Node):
             'set_emergency_stop',
             self.on_emergency_stop,
         )
+
+        self.auto_mode_service = self.create_service(
+            SetBool,
+            'set_auto_mode',
+            self.on_auto_mode,
+        )
+
+    def on_command_manual(self, msg):
+        if self.control_mode != 'manual':
+            return
+        self.on_command(msg)
+
+    def on_command_auto(self, msg):
+        if self.control_mode != 'auto':
+            return
+        self.on_command(msg)
 
 
     def on_command(self, msg):
@@ -107,6 +132,22 @@ class CommandGuard(Node):
             response.message = '비상정지를 해제했습니다. 새 속도 명령을 기다립니다'
             self.get_logger().info(response.message)
         
+        return response
+
+    def on_auto_mode(self, request, response):
+        next_mode = 'auto' if request.data else 'manual'
+
+        self.last_command_time = None
+        self.cmd_pub.publish(Twist())
+
+        self.control_mode = next_mode
+
+        response.success = True
+        response.message = (
+            f'{next_mode} 모드를 선택했습니다. 정지하고 새 입력을 기다립니다.'
+        )
+        self.get_logger().info(response.message)
+
         return response
 
 

@@ -359,3 +359,133 @@ def test_emergency_stop_release_requires_new_command(guard):
     assert published_command.linear.x == pytest.approx(-0.1)
     assert published_command.angular.z == pytest.approx(-0.3)
     assert node.last_command_time is not None
+
+
+def test_manual_mode_accepts_manual_command(guard):
+    node, publish_mock = guard
+
+    command = Twist()
+    command.linear.x = 0.1
+
+    node.on_command_manual(command)
+
+    publish_mock.assert_called_once()
+    assert publish_mock.call_args.args[0].linear.x == pytest.approx(0.1)
+    assert node.last_command_time is not None
+
+
+def test_manual_mode_ignores_auto_command(guard):
+    node, publish_mock = guard
+
+    # 먼저 선택된 입력으로 정상 명령을 전달
+    manual_command = Twist()
+    manual_command.linear.x = 0.1
+    node.on_command_manual(manual_command)
+
+    last_manual_time = node.last_command_time
+    publish_mock.reset_mock()
+
+    # 선택되지 않은 입력으로 다른 명령 전달
+    auto_command = Twist()
+    auto_command.linear.x = -0.1
+    node.on_command_auto(auto_command)
+
+    # 출력도 없어야 하고 타임아웃 기준 시각도 유지되어야 함
+    publish_mock.assert_not_called()
+    assert node.last_command_time == last_manual_time
+
+
+@pytest.mark.parametrize(
+    'auto_enabled',
+    [True, False],
+    ids=['manual_to_auto', 'auto_to_manual'],
+)
+def test_mode_switch_stops_and_waits_for_selected_input(
+    guard, auto_enabled,
+):
+    node, publish_mock = guard
+
+    # 전환 전·후의 입력 콜백 선택
+    if auto_enabled:
+        node.control_mode = 'manual'
+        old_command_callback = node.on_command_manual
+        new_command_callback = node.on_command_auto
+        expected_mode = 'auto'
+    else:
+        node.control_mode = 'auto'
+        old_command_callback = node.on_command_auto
+        new_command_callback = node.on_command_manual
+        expected_mode = 'manual'
+
+    # 준비: 전환 전 모드로 주행
+    old_command = Twist()
+    old_command.linear.x = 0.1
+    old_command_callback(old_command)
+
+    assert node.last_command_time is not None
+    publish_mock.reset_mock()
+
+    # 실행: 모드 전환 요청
+    request = SetBool.Request()
+    request.data = auto_enabled
+    result = node.on_auto_mode(request, SetBool.Response())
+
+    # 전환 순간에 정지하고 기존 명령 시간을 제거
+    assert result.success is True
+    assert node.control_mode == expected_mode
+    assert node.last_command_time is None
+    publish_mock.assert_called_once_with(Twist())
+    publish_mock.reset_mock()
+
+    # 새 입력이 없으면 정지 유지
+    node.check_timeout()
+
+    publish_mock.assert_called_once_with(Twist())
+    publish_mock.reset_mock()
+
+    # 이전 모드의 입력은 무시
+    old_command_callback(old_command)
+
+    publish_mock.assert_not_called()
+    assert node.last_command_time is None
+
+    # 새 모드의 입력은 전달
+    new_command = Twist()
+    new_command.linear.x = -0.1
+    new_command_callback(new_command)
+
+    publish_mock.assert_called_once()
+    assert publish_mock.call_args.args[0].linear.x == pytest.approx(-0.1)
+    assert node.last_command_time is not None
+
+
+@pytest.mark.parametrize('auto_enabled', [True, False])
+def test_mode_request_preserves_emergency_stop(guard, auto_enabled):
+    node, publish_mock = guard
+
+    # 준비: 비상정지 활성화
+    stop_request = SetBool.Request()
+    stop_request.data = True
+    node.on_emergency_stop(stop_request, SetBool.Response())
+    publish_mock.reset_mock()
+
+    # 실행: 비상정지 상태에서 모드 선택
+    mode_request = SetBool.Request()
+    mode_request.data = auto_enabled
+    node.on_auto_mode(mode_request, SetBool.Response())
+
+    assert node.emergency_stop_active is True
+    publish_mock.assert_called_once_with(Twist())
+    publish_mock.reset_mock()
+
+    # 선택된 입력이 들어와도 정지 출력
+    command = Twist()
+    command.linear.x = 0.1
+
+    if auto_enabled:
+        node.on_command_auto(command)
+    else:
+        node.on_command_manual(command)
+
+    publish_mock.assert_called_once_with(Twist())
+    assert node.last_command_time is None
