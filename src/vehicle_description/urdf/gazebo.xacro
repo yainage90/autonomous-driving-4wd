@@ -24,4 +24,49 @@
       <tf_topic>/tf</tf_topic>
     </plugin>
   </gazebo>
+
+  <!-- 시뮬레이션 라이다의 초기 측정 설정 -->
+  <xacro:arg
+    name="lidar_config_file"
+    default="${xacro.abs_filename('../config/lidar.yaml')}" />
+  <xacro:property
+    name="lidar_config"
+    value="${xacro.load_yaml('$(arg lidar_config_file)')['lidar']}" />
+
+  <!-- 기존 라이다 링크에 측정 기능 연결 -->
+  <gazebo reference="laser_frame">
+    <sensor name="lidar_sensor" type="gpu_lidar">
+      <pose>0 0 0 0 0 0</pose>
+      <always_on>true</always_on>
+      <update_rate>${lidar_config['update_rate_hz']}</update_rate>
+      <topic>/scan</topic>
+      <gz_frame_id>laser_frame</gz_frame_id>
+
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>${lidar_config['horizontal_samples']}</samples>
+            <resolution>1</resolution>
+            <min_angle>${lidar_config['min_angle_rad']}</min_angle>
+            <max_angle>${lidar_config['max_angle_rad']}</max_angle>
+          </horizontal>
+
+          <!-- 수평면 한 층을 측정하는 2D 라이다 -->
+          <vertical>
+            <samples>1</samples>
+            <resolution>1</resolution>
+            <min_angle>0</min_angle>
+            <max_angle>0</max_angle>
+          </vertical>
+        </scan>
+
+        <range>
+          <min>${lidar_config['min_range_m']}</min>
+          <max>${lidar_config['max_range_m']}</max>
+          <resolution>${lidar_config['range_resolution_m']}</resolution>
+        </range>
+      </lidar>
+    </sensor>
+  </gazebo>
+
 </robot>
