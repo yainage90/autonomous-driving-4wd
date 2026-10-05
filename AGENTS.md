@@ -8,9 +8,11 @@
 - ROS 2 자체와 ROS 패키지는 배포판에 맞는 방식(apt, rosdep, colcon)으로 관리하고, 프로젝트마다 버전이 달라지는 ML 라이브러리나 애플리케이션 의존성은 가상환경으로 관리
 
 ```bash
+source /opt/ros/jazzy/setup.bash
 source .venv/bin/activate
 source install/local_setup.bash  # 워크스페이스를 빌드한 뒤
 ```
+환경설정은 프로젝트 루트의 env.sh에 모두 있으므로 `source env.sh` 한 줄로 가능하다.
 
 ## 빌드 및 테스트
 
