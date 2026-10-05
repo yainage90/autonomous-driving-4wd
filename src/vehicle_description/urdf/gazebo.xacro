@@ -12,7 +12,12 @@
       <right_joint>front_right_wheel_joint</right_joint>
       <right_joint>rear_right_wheel_joint</right_joint>
 
-      <wheel_separation>${wheel_separation}</wheel_separation>
+      <!-- <wheel_separation>${wheel_separation}</wheel_separation> -->
+      <!-- 양방향 회전 시험에서 odom이 실제 회전량을 약 1.57배 과대 추정하여
+          DiffDrive 계산용 윤거를 보정한다. 실제 바퀴 배치는 유지한다.
+          이 설정은 바퀴 속도 명령과 오도메트리 계산에 모두 영향을 주므로,
+          보정 후 직선·양방향 회전·사각형 주행을 재검증해야 한다. -->
+      <wheel_separation>${wheel_separation * 1.57}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
 
       <topic>/cmd_vel</topic>
