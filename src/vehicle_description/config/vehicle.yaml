@@ -1,0 +1,6 @@
+vehicle:
+  geometry:
+    wheel_separation_m: 0.1203
+
+  calibration:
+    wheel_separation_multiplier: 1.57

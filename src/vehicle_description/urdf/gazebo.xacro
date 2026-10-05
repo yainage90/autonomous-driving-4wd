@@ -17,7 +17,7 @@
           DiffDrive 계산용 윤거를 보정한다. 실제 바퀴 배치는 유지한다.
           이 설정은 바퀴 속도 명령과 오도메트리 계산에 모두 영향을 주므로,
           보정 후 직선·양방향 회전·사각형 주행을 재검증해야 한다. -->
-      <wheel_separation>${wheel_separation * 1.57}</wheel_separation>
+      <wheel_separation>${wheel_separation * wheel_separation_multiplier}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
 
       <topic>/cmd_vel</topic>
@@ -28,6 +28,22 @@
 
       <tf_topic>/tf</tf_topic>
     </plugin>
+
+    <!-- 바퀴 회전량과 독립적으로 실제 모델 자세를 발행한다.
+         검증용 TF는 별도 토픽으로 분리하고 ROS /tf로 브리지하지 않는다. -->
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <odom_frame>world</odom_frame>
+      <robot_base_frame>base_footprint</robot_base_frame>
+
+      <odom_topic>/ground_truth/odom</odom_topic>
+      <tf_topic>/ground_truth/tf</tf_topic>
+
+      <dimensions>2</dimensions>
+      <odom_publish_frequency>50</odom_publish_frequency>
+      <gaussian_noise>0</gaussian_noise>
+    </plugin>
+
   </gazebo>
 
   <!-- 시뮬레이션 라이다의 초기 측정 설정 -->
