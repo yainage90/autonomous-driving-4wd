@@ -1,0 +1,16 @@
+amcl:
+  ros__parameters:
+    global_frame_id: map
+    odom_frame_id: odom
+    base_frame_id: base_footprint
+
+    scan_topic: /scan
+    map_topic: /map
+
+    robot_model_type: nav2_amcl::DifferentialMotionModel
+    tf_broadcast: true
+    set_initial_pose: false
+
+    laser_model_type: likelihood_field
+    laser_min_range: -1.0
+    laser_max_range: -1.0

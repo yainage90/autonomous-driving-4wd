@@ -12,6 +12,7 @@
   <exec_depend>vehicle_description</exec_depend>
   <exec_depend>vehicle_control</exec_depend>
   <exec_depend>vehicle_simulation</exec_depend>
+  <exec_depend>vehicle_localization</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
