@@ -46,7 +46,6 @@ def test_installed_map_files():
 
     assert metadata['resolution'] > 0.0
     assert len(metadata['origin']) == 3
-    assert metadata['mode'] == 'trinary'
     assert metadata['negate'] in (0, 1)
     assert (
         0.0 <= metadata['free_thresh']

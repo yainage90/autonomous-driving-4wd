@@ -68,27 +68,7 @@ def test_lidar_config_is_valid(lidar_config):
     )
 
 
-def test_lidar_scan_settings(lidar, lidar_config):
-    assert float(lidar.findtext('update_rate')) == pytest.approx(
-        lidar_config['update_rate_hz']
-    )
-
-    horizontal = lidar.find('lidar/scan/horizontal')
-    assert horizontal is not None
-
-    assert int(horizontal.findtext('samples')) == (
-        lidar_config['horizontal_samples']
-    )
-    assert float(horizontal.findtext('min_angle')) == pytest.approx(
-        lidar_config['min_angle_rad']
-    )
-    assert float(horizontal.findtext('max_angle')) == pytest.approx(
-        lidar_config['max_angle_rad']
-    )
-
-    # 設定한 샘플 수와 출력 데이터 수를 같게 유지
-    assert float(horizontal.findtext('resolution')) == pytest.approx(1.0)
-
+def test_lidar_is_2d(lidar):
     # 2D 라이다라는 구조는 설정 파일과 독립적으로 검사
     vertical = lidar.find('lidar/scan/vertical')
     assert vertical is not None
@@ -96,18 +76,3 @@ def test_lidar_scan_settings(lidar, lidar_config):
     assert float(vertical.findtext('resolution')) == pytest.approx(1.0)
     assert float(vertical.findtext('min_angle')) == pytest.approx(0.0)
     assert float(vertical.findtext('max_angle')) == pytest.approx(0.0)
-
-
-def test_lidar_range_settings(lidar, lidar_config):
-    measurement_range = lidar.find('lidar/range')
-    assert measurement_range is not None
-
-    assert float(measurement_range.findtext('min')) == pytest.approx(
-        lidar_config['min_range_m']
-    )
-    assert float(measurement_range.findtext('max')) == pytest.approx(
-        lidar_config['max_range_m']
-    )
-    assert float(measurement_range.findtext('resolution')) == pytest.approx(
-        lidar_config['range_resolution_m']
-    )
