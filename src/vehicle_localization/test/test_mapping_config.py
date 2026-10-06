@@ -29,3 +29,26 @@ def test_installed_mapping_files():
     assert params['transform_publish_period'] > 0.0
     assert params['map_update_interval'] > 0.0
     assert 0.0 <= params['min_laser_range'] < params['max_laser_range']
+
+
+def test_installed_map_files():
+    share = Path(get_package_share_directory('vehicle_localization'))
+    yaml_path = share / 'maps' / 'evaluation.yaml'
+
+    assert yaml_path.is_file()
+
+    with yaml_path.open(encoding='utf-8') as stream:
+        metadata = yaml.safe_load(stream)
+
+    image_path = yaml_path.parent / metadata['image']
+    assert image_path.is_file()
+    assert image_path.stat().st_size > 0
+
+    assert metadata['resolution'] > 0.0
+    assert len(metadata['origin']) == 3
+    assert metadata['mode'] == 'trinary'
+    assert metadata['negate'] in (0, 1)
+    assert (
+        0.0 <= metadata['free_thresh']
+        < metadata['occupied_thresh'] <= 1.0
+    )
