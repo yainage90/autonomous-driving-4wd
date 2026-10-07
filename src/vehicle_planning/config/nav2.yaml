@@ -1,11 +1,32 @@
 global_costmap:
   global_costmap:
     ros__parameters:
+      use_sim_time: true
+      global_frame: map
       robot_base_frame: base_footprint
       # 현재 차량 모델과 카메라 회전 범위를 포함한 외접 사각형.
       # 단위: m, 순서: 앞왼쪽 → 뒤왼쪽 → 뒤오른쪽 → 앞오른쪽.
       footprint: "[[0.135, 0.074], [-0.120, 0.074], [-0.120, -0.074], [0.135, -0.074]]"
       footprint_padding: 0.0
+
+      rolling_window: false
+      resolution: 0.05
+      track_unknown_space: true
+      update_frequency: 1.0
+      publish_frequency: 1.0
+
+      plugins: ["static_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: /map
+        map_subscribe_transient_local: true
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.55
+        cost_scaling_factor: 10.0
+
 
 local_costmap:
   local_costmap:
@@ -17,12 +38,36 @@ local_costmap:
       footprint_padding: 0.0
 
       rolling_window: true
+      track_unknown_space: false
       width: 3
       height: 3
-      resolution: 0.02
+      resolution: 0.05
       update_frequency: 5.0
       publish_frequency: 2.0
+      always_send_full_costmap: true
 
-      plugins: ["inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer"]
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        observation_sources: scan
+
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          marking: true
+          clearing: true
+          inf_is_valid: true
+
+          min_obstacle_height: 0.0
+          max_obstacle_height: 2.0
+
+          obstacle_min_range: 0.10
+          obstacle_max_range: 2.5
+          raytrace_min_range: 0.10
+          raytrace_max_range: 3.0
+
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.55
+        cost_scaling_factor: 10.0
