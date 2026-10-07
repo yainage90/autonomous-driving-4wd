@@ -1,0 +1,28 @@
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      robot_base_frame: base_footprint
+      # 현재 차량 모델과 카메라 회전 범위를 포함한 외접 사각형.
+      # 단위: m, 순서: 앞왼쪽 → 뒤왼쪽 → 뒤오른쪽 → 앞오른쪽.
+      footprint: "[[0.135, 0.074], [-0.120, 0.074], [-0.120, -0.074], [0.135, -0.074]]"
+      footprint_padding: 0.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      global_frame: odom
+      robot_base_frame: base_footprint
+      footprint: "[[0.135, 0.074], [-0.120, 0.074], [-0.120, -0.074], [0.135, -0.074]]"
+      footprint_padding: 0.0
+
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.02
+      update_frequency: 5.0
+      publish_frequency: 2.0
+
+      plugins: ["inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
