@@ -84,3 +84,20 @@ planner_server:
       allow_unknown: false
       max_planning_time: 2.0
       cost_travel_multiplier: 2.0
+
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /odom
+
+    navigators: ["navigate_to_pose"]
+
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code

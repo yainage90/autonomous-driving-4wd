@@ -9,6 +9,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/nav2.yaml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
+        ('share/' + package_name + '/behavior_trees', glob('behavior_trees/*.xml')),
     ],
     install_requires=['setuptools'], zip_safe=True,
     maintainer='vehicle_team', maintainer_email='maintainer@example.com',

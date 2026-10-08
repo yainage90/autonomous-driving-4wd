@@ -45,9 +45,9 @@ def generate_launch_description():
 
     mode_argument = DeclareLaunchArgument(
         'mode',
-        default_value='localization',
-        choices=['localization', 'mapping'],
-        description='Localization or mapping mode',
+        default_value='navigation',
+        choices=['mapping', 'navigation'],
+        description='Mapping or navigation mode',
     )
 
     map_argument = DeclareLaunchArgument(
@@ -66,7 +66,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             f'{localization_share}/launch/localization.launch.py'
         ),
-        condition=LaunchConfigurationEquals('mode', 'localization'),
+        condition=LaunchConfigurationEquals('mode', 'navigation'),
         launch_arguments={
             'map': LaunchConfiguration('map'),
             'use_sim_time': 'true',
@@ -84,6 +84,16 @@ def generate_launch_description():
         }.items(),
     )
 
+    nav2 = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            f'{package_share}/launch/nav2.launch.py'
+        ),
+        condition=LaunchConfigurationEquals('mode', 'navigation'),
+        launch_arguments={
+            'autostart': 'false',
+        }.items(),
+    )
+
     return LaunchDescription(
         [
             world_argument,
@@ -95,5 +105,6 @@ def generate_launch_description():
             command_guard,
             localization,
             mapping,
+            nav2,
         ]
     )
