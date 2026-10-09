@@ -18,7 +18,7 @@ class CommandGuard(Node):
             10,
         )
 
-        self.control_mode = 'manual'
+        self.control_mode = 'auto'
 
         self.cmd_sub_manual = self.create_subscription(
             Twist,

@@ -11,7 +11,7 @@ from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-
+from std_srvs.srv import SetBool
 
 
 @pytest.mark.skipif(
@@ -324,7 +324,25 @@ def test_rotation_matches_ground_truth(direction):
 
         pytest.fail('최신 데이터를 수신한 정지 상태를 확인하지 못했습니다.')
 
+    mode_client = node.create_client(SetBool, '/set_auto_mode')
+
     try:
+
+        assert mode_client.wait_for_service(timeout_sec=5.0), (
+            '/set_auto_mode 서비스가 준비되지 않았습니다.'
+        )
+
+        request = SetBool.Request()
+        request.data = False  # 수동 모드
+        future = mode_client.call_async(request)
+        executor.spin_until_future_complete(future, timeout_sec=5.0)
+
+        assert future.done(), '수동 모드 전환 응답 시간이 초과됐습니다.'
+        response = future.result()
+        assert response is not None and response.success, (
+            '수동 모드 전환에 실패했습니다.'
+        )
+
         start_odom, start_truth = wait_until_stopped()
 
         assert publisher.get_subscription_count() >= 1, (

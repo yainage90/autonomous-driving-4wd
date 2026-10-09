@@ -363,6 +363,7 @@ def test_emergency_stop_release_requires_new_command(guard):
 
 def test_manual_mode_accepts_manual_command(guard):
     node, publish_mock = guard
+    node.control_mode = 'manual'
 
     command = Twist()
     command.linear.x = 0.1
@@ -376,6 +377,7 @@ def test_manual_mode_accepts_manual_command(guard):
 
 def test_manual_mode_ignores_auto_command(guard):
     node, publish_mock = guard
+    node.control_mode = 'manual'
 
     # 먼저 선택된 입력으로 정상 명령을 전달
     manual_command = Twist()

@@ -61,6 +61,7 @@ def ros_system():
 
     try:
         guard = CommandGuard()
+        guard.control_mode = 'manual'
         nodes.append(guard)
 
         probe = Node('test_probe')
