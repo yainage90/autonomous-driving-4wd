@@ -14,14 +14,15 @@ controller_server:
 
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.1745
+      xy_goal_tolerance: 0.10
+      yaw_goal_tolerance: 0.1396
       stateful: true
 
     controller_plugins: ["follow_path"]
 
     follow_path:
       plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
 
       # 선속도: m/s, 각속도: rad/s
       min_vel_x: 0.0
@@ -63,8 +64,8 @@ controller_server:
       vy_samples: 1
       vtheta_samples: 20
 
-      xy_goal_tolerance: 0.15
-      trans_stopped_velocity: 0.02
+      xy_goal_tolerance: 0.10
+      trans_stopped_velocity: 0.005
 
       # 궤적 평가 기준
       critics:
