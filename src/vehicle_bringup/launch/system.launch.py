@@ -90,7 +90,7 @@ def generate_launch_description():
         ),
         condition=LaunchConfigurationEquals('mode', 'navigation'),
         launch_arguments={
-            'autostart': 'false',
+            'autostart': 'true',
         }.items(),
     )
 
