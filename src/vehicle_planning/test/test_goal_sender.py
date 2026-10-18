@@ -1,0 +1,576 @@
+import math
+import pytest
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from action_msgs.msg import GoalStatus
+from action_msgs.srv import CancelGoal
+from nav2_msgs.action import NavigateToPose
+from std_srvs.srv import Trigger
+from nav_msgs.msg import Odometry
+
+from vehicle_planning.goal_sender import (
+    NavigationState,
+    build_goal,
+    classify_result,
+    GoalSender,
+    is_stationary,
+)
+
+
+def test_build_goal_sets_map_pose():
+    goal = build_goal(1.0, -2.0, math.pi / 2.0)
+    pose = goal.pose.pose
+
+    assert goal.pose.header.frame_id == 'map'
+    assert pose.position.x == pytest.approx(1.0)
+    assert pose.position.y == pytest.approx(-2.0)
+    assert pose.position.z == pytest.approx(0.0)
+
+    assert (
+        pose.orientation.x,
+        pose.orientation.y,
+        pose.orientation.z,
+        pose.orientation.w,
+    ) == pytest.approx((
+        0.0,
+        0.0,
+        math.sqrt(0.5),
+        math.sqrt(0.5),
+    ))
+
+
+@pytest.mark.parametrize('index', [0, 1, 2])
+@pytest.mark.parametrize('value', [
+    float('nan'),
+    float('inf'),
+    float('-inf'),
+])
+def test_build_goal_rejects_non_finite_input(index, value):
+    coordinates = [1.0, 2.0, 0.0]
+    coordinates[index] = value
+
+    with pytest.raises(ValueError, match='finite'):
+        build_goal(*coordinates)
+
+
+@pytest.mark.parametrize(
+    'status, error_code, expected',
+    [
+        pytest.param(
+            GoalStatus.STATUS_SUCCEEDED,
+            NavigateToPose.Result.NONE,
+            NavigationState.SUCCEEDED,
+            id='succeeded-without-error',
+        ),
+        pytest.param(
+            GoalStatus.STATUS_SUCCEEDED,
+            1,
+            NavigationState.FAILED,
+            id='succeeded-with-error',
+        ),
+        pytest.param(
+            GoalStatus.STATUS_ABORTED,
+            NavigateToPose.Result.NONE,
+            NavigationState.FAILED,
+            id='aborted-without-error-code',
+        ),
+        pytest.param(
+            GoalStatus.STATUS_CANCELED,
+            NavigateToPose.Result.NONE,
+            NavigationState.CANCELED,
+            id='canceled',
+        ),
+        pytest.param(
+            GoalStatus.STATUS_UNKNOWN,
+            NavigateToPose.Result.NONE,
+            NavigationState.FAILED,
+            id='unknown-status',
+        ),
+    ],
+)
+def test_classify_result(status, error_code, expected):
+    assert classify_result(status, error_code) == expected
+
+
+@pytest.mark.parametrize('state', [
+    NavigationState.SENDING,
+    NavigationState.RUNNING,
+    NavigationState.CANCELING,
+    NavigationState.STOPPING,
+])
+def test_send_goal_rejects_new_goal_while_busy(state):
+    action_client = Mock()
+    sender = SimpleNamespace(
+        _state=state,
+        _action_client=action_client,
+    )
+
+    with pytest.raises(RuntimeError, match='cancel'):
+        GoalSender.send_goal(sender, 1.0, 2.0, 0.0)
+
+    action_client.server_is_ready.assert_not_called()
+    action_client.send_goal_async.assert_not_called()
+    assert sender._state == state
+
+
+def test_cancel_goal_requests_cancellation_and_keeps_handle():
+    goal_handle = Mock()
+    sender = SimpleNamespace(
+        _state=NavigationState.RUNNING,
+        _goal_handle=goal_handle,
+        _set_state=Mock(),
+    )
+
+    cancel_future = GoalSender.cancel_goal(sender)
+
+    goal_handle.cancel_goal_async.assert_called_once_with()
+    assert cancel_future is goal_handle.cancel_goal_async.return_value
+    assert sender._goal_handle is goal_handle
+    sender._set_state.assert_called_once_with(
+        NavigationState.CANCELING
+    )
+
+    cancel_future.add_done_callback.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'result_error',
+    [None, RuntimeError('result unavailable')],
+    ids=['canceled', 'response-error'],
+)
+def test_result_callback_preserves_goal_until_result_is_known(
+    result_error,
+):
+    goal_handle = object()
+    future = Mock()
+    future.result.return_value = SimpleNamespace(
+        status=GoalStatus.STATUS_CANCELED,
+        result=NavigateToPose.Result(),
+    )
+    future.result.side_effect = result_error
+
+    sender = SimpleNamespace(
+        _goal_handle=goal_handle,
+        _result_future=future,
+        _pending_result_state=None,
+        _result_error=None,
+        _set_state=Mock(),
+        get_logger=Mock(),
+        _start_stop_check=Mock(),
+        _navigation_fault=None,
+        _fail_navigation=Mock(),
+    )
+
+    sender._handle_result = lambda response: (
+        GoalSender._handle_result(sender, response)
+    )
+
+    GoalSender._result_callback(sender, future)
+
+    if result_error is None:
+        assert sender._pending_result_state == NavigationState.CANCELED
+        assert sender._goal_handle is None
+        sender._set_state.assert_called_once_with(
+            NavigationState.STOPPING
+        )
+        sender._start_stop_check.assert_called_once_with()
+    else:
+        assert sender._pending_result_state is None
+        assert sender._goal_handle is goal_handle
+        assert sender._result_error is result_error
+        sender._set_state.assert_not_called()
+        sender._start_stop_check.assert_not_called()
+        sender._fail_navigation.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'state, return_code, expected_state_change',
+    [
+        (
+            NavigationState.CANCELING,
+            CancelGoal.Response.ERROR_NONE,
+            None,
+        ),
+        (
+            NavigationState.CANCELING,
+            CancelGoal.Response.ERROR_REJECTED,
+            NavigationState.RUNNING,
+        ),
+        (
+            NavigationState.CANCELED,
+            CancelGoal.Response.ERROR_REJECTED,
+            None,
+        ),
+    ],
+    ids=['accepted', 'rejected', 'late-rejection'],
+)
+def test_handle_cancel_response(
+    state, return_code, expected_state_change
+):
+    goal_handle = object()
+    sender = SimpleNamespace(
+        _state=state,
+        _goal_handle=(
+            None if state == NavigationState.CANCELED else goal_handle
+        ),
+        _set_state=Mock(),
+        get_logger=Mock(),
+        _navigation_fault=None,
+    )
+    response = SimpleNamespace(
+        return_code=return_code,
+        goals_canceling=(
+            [object()] if return_code == CancelGoal.Response.ERROR_NONE
+            else []
+        ),
+    )
+    future = Mock()
+    future.result.return_value = response
+
+    GoalSender._handle_cancel_response(sender, future, goal_handle)
+
+    if expected_state_change is None:
+        sender._set_state.assert_not_called()
+    else:
+        sender._set_state.assert_called_once_with(
+            expected_state_change
+        )
+
+
+@pytest.mark.parametrize('error', [
+    None,
+    'No running goal to cancel',
+])
+def test_cancel_callback_reports_request_outcome(error):
+    sender = SimpleNamespace(
+        cancel_goal=Mock(
+            side_effect=RuntimeError(error) if error else None
+        ),
+    )
+    response = Trigger.Response()
+
+    returned = GoalSender._cancel_callback(
+        sender, Trigger.Request(), response
+    )
+
+    assert returned is response
+    sender.cancel_goal.assert_called_once_with()
+    assert response.success == (error is None)
+
+    if error:
+        assert response.message == error
+    else:
+        assert 'requested' in response.message
+
+
+@pytest.mark.parametrize(
+    'linear_x, linear_y, angular_z, expected',
+    [
+        pytest.param(
+            0.02, 0.0, 0.05, True,
+            id='at-stop-thresholds',
+        ),
+        pytest.param(
+            -0.03, 0.0, 0.0, False,
+            id='moving-backward',
+        ),
+        pytest.param(
+            0.015, 0.015, 0.0, False,
+            id='combined-planar-speed',
+        ),
+        pytest.param(
+            0.0, 0.0, -0.06, False,
+            id='rotating-clockwise',
+        ),
+        pytest.param(
+            float('nan'), 0.0, 0.0, False,
+            id='invalid-velocity',
+        ),
+    ],
+)
+def test_is_stationary(
+    linear_x, linear_y, angular_z, expected
+):
+    assert is_stationary(
+        linear_x, linear_y, angular_z
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    'measurement_delay_ns',
+    [0, 600_000_000],
+    ids=['current-measurements', 'delayed-measurements'],
+)
+def test_stop_confirmation_requires_continuous_fresh_odometry(
+    monkeypatch, measurement_delay_ns,
+):
+    sender = SimpleNamespace(
+        _stationary_since_ns=None,
+        _last_odom_stamp_ns=None,
+        _last_odom_received_at=None,
+        get_clock=Mock(),
+    )
+    sender._sensor_is_fresh = lambda msg, received_at: (
+        GoalSender._sensor_is_fresh(sender, msg, received_at)
+    )
+
+    clock = Mock(return_value=0.0)
+    monkeypatch.setattr(
+        'vehicle_planning.goal_sender.time.monotonic',
+        clock,
+    )
+
+    def receive(stamp_ns, received_at):
+        msg = Odometry()
+        msg.header.frame_id = 'odom'
+        msg.child_frame_id = 'base_footprint'
+        msg.pose.pose.orientation.w = 1.0
+        msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(
+            stamp_ns, 1_000_000_000,
+        )
+
+        clock.return_value = received_at
+        sender.get_clock.return_value.now.return_value.nanoseconds = (
+            stamp_ns + measurement_delay_ns
+        )
+        GoalSender._odom_callback(sender, msg)
+
+    for index in range(11):
+        receive(
+            1_000_000_000 + index * 100_000_000,
+            index / 10,
+        )
+        expected = index == 10 and measurement_delay_ns == 0
+        assert GoalSender.is_stop_confirmed(sender) is expected
+
+    # 최근 수신했어도 ROS 시간 기준으로 오래되면 확인을 무효로 한다.
+    if measurement_delay_ns == 0:
+        sender.get_clock.return_value.now.return_value.nanoseconds += (
+            600_000_000
+        )
+        assert not GoalSender.is_stop_confirmed(sender)
+
+    # 수신이 중단돼도 확인을 무효로 한다.
+    clock.return_value = 1.6
+    assert not GoalSender.is_stop_confirmed(sender)
+
+    # 수신 재개 후 정지 유지 시간을 새로 계산한다.
+    receive(3_000_000_000, 1.6)
+    assert not GoalSender.is_stop_confirmed(sender)
+    
+
+@pytest.mark.parametrize(
+    'confirmed, checked_at',
+    [(True, 11.0), (False, 15.0)],
+    ids=['stop-confirmed', 'stop-timeout'],
+)
+def test_stop_timer_checks_fresh_observation(
+    monkeypatch, confirmed, checked_at
+):
+    sender = SimpleNamespace(
+        _state=NavigationState.STOPPING,
+        _pending_result_state=NavigationState.CANCELED,
+        _stationary_since_ns=1_000_000_000,
+        _last_odom_stamp_ns=2_000_000_000,
+        _last_odom_received_at=0.0,
+        _stop_deadline=None,
+        _stop_error=None,
+        is_stop_confirmed=Mock(return_value=confirmed),
+        _set_state=Mock(),
+        get_logger=Mock(),
+    )
+    clock = Mock(return_value=10.0)
+    monkeypatch.setattr(
+        'vehicle_planning.goal_sender.time.monotonic',
+        clock,
+    )
+
+    GoalSender._start_stop_check(sender)
+
+    assert sender._stationary_since_ns is None
+    assert sender._last_odom_stamp_ns is None
+    assert sender._last_odom_received_at is None
+
+    clock.return_value = checked_at
+    GoalSender._check_state(sender)
+
+    assert sender._stop_deadline is None
+
+    if confirmed:
+        assert sender._stop_error is None
+        sender._set_state.assert_called_once_with(
+            NavigationState.CANCELED
+        )
+    else:
+        assert isinstance(sender._stop_error, TimeoutError)
+        sender._set_state.assert_not_called()
+
+
+def test_goal_response_error_keeps_acceptance_unknown():
+    sender = SimpleNamespace(
+        _state=NavigationState.SENDING,
+        _result_future=None,
+        _handle_goal_response=Mock(),
+        get_logger=Mock(),
+        _fail_navigation=Mock(),
+    )
+    future = Mock()
+    future.result.side_effect = RuntimeError('response unavailable')
+
+    GoalSender._goal_response_callback(sender, future)
+
+    assert sender._state == NavigationState.SENDING
+    assert sender._result_future is None
+    sender._fail_navigation.assert_called_once()
+
+
+def test_goal_response_timeout_keeps_new_goals_blocked(monkeypatch):
+    sender = SimpleNamespace(
+        _state=NavigationState.SENDING,
+        _goal_response_deadline=5.0,
+        get_logger=Mock(),
+        _fail_navigation=Mock(),
+    )
+    monkeypatch.setattr(
+        'vehicle_planning.goal_sender.time.monotonic',
+        Mock(return_value=5.0),
+    )
+
+    GoalSender._check_state(sender)
+    GoalSender._check_state(sender)
+
+    assert sender._state == NavigationState.SENDING
+    assert sender._goal_response_deadline is None
+    sender._fail_navigation.assert_called_once_with(
+        'Goal response timed out; acceptance is unknown'
+    )
+
+
+def test_send_goal_rejects_unready_navigation():
+    action_client = Mock()
+    action_client.server_is_ready.return_value = True
+
+    sender = SimpleNamespace(
+        _state=NavigationState.WAITING,
+        _action_client=action_client,
+        _readiness_error=Mock(
+            return_value='Navigation TF is unavailable',
+        ),
+    )
+
+    with pytest.raises(TimeoutError, match='Navigation TF'):
+        GoalSender.send_goal(sender, 1.0, 2.0, 0.0)
+
+    action_client.send_goal_async.assert_not_called()
+    assert sender._state == NavigationState.WAITING
+
+
+def test_safety_fault_keeps_motion_blocked_after_data_recovers():
+    reason = 'Scan is unavailable, invalid, or stale'
+    sender = SimpleNamespace(
+        _state=NavigationState.RUNNING,
+        _navigation_fault=None,
+        _goal_handle=Mock(),
+        _navigation_pub=Mock(),
+        _readiness_error=Mock(return_value=reason),
+        cancel_goal=Mock(),
+        get_logger=Mock(),
+    )
+
+    sender._request_safety_cancel = lambda: (
+        GoalSender._request_safety_cancel(sender)
+    )
+    sender._fail_navigation = lambda error: (
+        GoalSender._fail_navigation(sender, error)
+    )
+
+    # 주행 중 이상을 발견하면 허가를 차단하고 취소를 요청한다.
+    GoalSender._check_navigation_safety(sender)
+
+    assert sender._navigation_fault == reason
+    sender.cancel_goal.assert_called_once_with()
+
+    # 데이터가 복구돼도 같은 목표의 주행 허가를 복원하지 않는다.
+    sender._readiness_error.return_value = None
+    GoalSender._check_navigation_safety(sender)
+    GoalSender._check_navigation_safety(sender)
+
+    assert sender._navigation_fault == reason
+    sender.cancel_goal.assert_called_once_with()
+    assert sender._navigation_pub.publish.called
+    assert all(
+        not call.args[0].data
+        for call in sender._navigation_pub.publish.call_args_list
+    )
+
+
+def test_late_acceptance_after_fault_waits_for_result_and_stop():
+    sender = SimpleNamespace(
+        _state=NavigationState.SENDING,
+        _navigation_fault='Scan interrupted',
+        _goal_handle=None,
+        _navigation_pub=Mock(),
+        is_stop_confirmed=Mock(return_value=False),
+        get_logger=Mock(),
+    )
+    sender._set_state = lambda state: setattr(
+        sender, '_state', state,
+    )
+    sender.cancel_goal = lambda: GoalSender.cancel_goal(sender)
+    sender._request_safety_cancel = lambda: (
+        GoalSender._request_safety_cancel(sender)
+    )
+
+    # 안전 오류 발생 후 늦게 수락된 목표도 취소한다.
+    goal_handle = Mock()
+    goal_handle.accepted = True
+
+    result_future = GoalSender._handle_goal_response(
+        sender, goal_handle,
+    )
+
+    assert result_future is goal_handle.get_result_async.return_value
+    assert sender._state == NavigationState.CANCELING
+    goal_handle.cancel_goal_async.assert_called_once_with()
+
+    # 취소가 거부돼도 RUNNING으로 복귀하지 않는다.
+    cancel_future = Mock()
+    cancel_future.result.return_value = SimpleNamespace(
+        return_code=CancelGoal.Response.ERROR_REJECTED,
+        goals_canceling=[],
+    )
+    GoalSender._handle_cancel_response(
+        sender, cancel_future, goal_handle,
+    )
+
+    assert sender._state == NavigationState.CANCELING
+    GoalSender._check_navigation_safety(sender)
+
+    # Nav2의 취소 결과는 안전 오류 때문에 최종 실패로 분류한다.
+    response = SimpleNamespace(
+        status=GoalStatus.STATUS_CANCELED,
+        result=NavigateToPose.Result(),
+    )
+    sender._pending_result_state = GoalSender._handle_result(
+        sender, response,
+    )
+
+    assert sender._pending_result_state == NavigationState.FAILED
+    assert sender._state == NavigationState.STOPPING
+
+    GoalSender._start_stop_check(sender)
+    GoalSender._check_state(sender)
+
+    assert sender._state == NavigationState.STOPPING
+
+    # 실제 정지를 확인한 뒤에만 FAILED로 종료한다.
+    sender.is_stop_confirmed.return_value = True
+    GoalSender._check_state(sender)
+
+    assert sender._state == NavigationState.FAILED
+    GoalSender._check_navigation_safety(sender)
+    assert all(
+        not call.args[0].data
+        for call in sender._navigation_pub.publish.call_args_list
+    )

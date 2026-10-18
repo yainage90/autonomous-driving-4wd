@@ -1,0 +1,8 @@
+# Position in map frame, meters. Yaw in radians.
+float64 x
+float64 y
+float64 yaw
+---
+# Whether this node submitted the request to Nav2.
+bool success
+string message

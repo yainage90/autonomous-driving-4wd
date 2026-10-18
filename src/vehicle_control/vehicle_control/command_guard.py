@@ -6,6 +6,7 @@ from rclpy.clock_type import ClockType
 
 from geometry_msgs.msg import Twist
 from std_srvs.srv import SetBool
+from std_msgs.msg import Bool
 
 
 class CommandGuard(Node):
@@ -65,6 +66,27 @@ class CommandGuard(Node):
             self.on_auto_mode,
         )
 
+        self.declare_parameter('navigation_timeout_sec', 0.5)
+        self.navigation_timeout_sec = self.get_parameter(
+            'navigation_timeout_sec'
+        ).value
+
+        if (
+            not math.isfinite(self.navigation_timeout_sec)
+            or self.navigation_timeout_sec <= 0.0
+        ):
+            raise ValueError('navigation_timeout_sec must be finite and positive')
+
+        self._navigation_allowed = False
+        self._navigation_received_at = None
+
+        self.navigation_allowed_subscription = self.create_subscription(
+            Bool,
+            'navigation_allowed',
+            self.on_navigation_allowed,
+            1,
+        )
+
     def on_command_manual(self, msg):
         if self.control_mode != 'manual':
             return
@@ -73,6 +95,12 @@ class CommandGuard(Node):
     def on_command_auto(self, msg):
         if self.control_mode != 'auto':
             return
+
+        if not self._navigation_is_allowed():
+            self.last_command_time = None
+            self.cmd_pub.publish(Twist())
+            return
+        
         self.on_command(msg)
 
 
@@ -156,6 +184,14 @@ class CommandGuard(Node):
             self.cmd_pub.publish(Twist())
             return
 
+        if (
+            self.control_mode == 'auto'
+            and not self._navigation_is_allowed()
+        ):
+            self.last_command_time = None
+            self.cmd_pub.publish(Twist())
+            return
+
         if self.last_command_time is None:
             self.cmd_pub.publish(Twist())
             return
@@ -165,6 +201,27 @@ class CommandGuard(Node):
             self.last_command_time = None
             self.cmd_pub.publish(Twist())
             self.get_logger().warning('속도 명령 타임아웃으로 정지합니다')
+    
+    def on_navigation_allowed(self, msg):
+        self._navigation_allowed = msg.data
+        self._navigation_received_at = self.safety_clock.now()
+
+        if self.control_mode == 'auto' and not msg.data:
+            self.last_command_time = None
+            self.cmd_pub.publish(Twist())
+
+    def _navigation_is_allowed(self) -> bool:
+        if (
+            not self._navigation_allowed
+            or self._navigation_received_at is None
+        ):
+            return False
+
+        elapsed = (
+            self.safety_clock.now() - self._navigation_received_at
+        ).nanoseconds / 1_000_000_000
+
+        return 0.0 <= elapsed < self.navigation_timeout_sec
 
 
 def main(args=None):

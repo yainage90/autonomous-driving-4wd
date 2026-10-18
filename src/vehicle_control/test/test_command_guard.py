@@ -4,6 +4,7 @@ import pytest
 import rclpy
 from geometry_msgs.msg import Twist
 from std_srvs.srv import SetBool
+from std_msgs.msg import Bool
 from rclpy.time import Time
 
 from vehicle_control.command_guard import CommandGuard
@@ -16,6 +17,7 @@ def guard():
 
     try:
         node = CommandGuard()
+        node.control_mode = 'manual'
 
         with patch.object(node.cmd_pub, 'publish') as publish_mock:
             yield node, publish_mock
@@ -406,6 +408,7 @@ def test_mode_switch_stops_and_waits_for_selected_input(
     guard, auto_enabled,
 ):
     node, publish_mock = guard
+    node.on_navigation_allowed(Bool(data=True))
 
     # 전환 전·후의 입력 콜백 선택
     if auto_enabled:
@@ -464,6 +467,7 @@ def test_mode_switch_stops_and_waits_for_selected_input(
 @pytest.mark.parametrize('auto_enabled', [True, False])
 def test_mode_request_preserves_emergency_stop(guard, auto_enabled):
     node, publish_mock = guard
+    node.on_navigation_allowed(Bool(data=True))
 
     # 준비: 비상정지 활성화
     stop_request = SetBool.Request()
@@ -491,3 +495,52 @@ def test_mode_request_preserves_emergency_stop(guard, auto_enabled):
 
     publish_mock.assert_called_once_with(Twist())
     assert node.last_command_time is None
+
+
+@pytest.mark.parametrize(
+    'permission, elapsed_ns',
+    [
+        pytest.param(None, 0, id='never-received'),
+        pytest.param(False, 0, id='explicitly-blocked'),
+        pytest.param(True, 500_000_000, id='permission-expired'),
+    ],
+)
+def test_auto_blocks_without_fresh_permission(
+    guard, permission, elapsed_ns,
+):
+    node, publish_mock = guard
+    node.control_mode = 'auto'
+
+    start = Time(
+        nanoseconds=10_000_000_000,
+        clock_type=node.safety_clock.clock_type,
+    )
+    checked_at = Time(
+        nanoseconds=start.nanoseconds + elapsed_ns,
+        clock_type=node.safety_clock.clock_type,
+    )
+
+    with patch.object(node.safety_clock, 'now') as now_mock:
+        now_mock.return_value = start
+
+        if permission is not None:
+            node.on_navigation_allowed(Bool(data=permission))
+
+        publish_mock.reset_mock()
+        now_mock.return_value = checked_at
+
+        command = Twist()
+        command.linear.x = 0.1
+        node.on_command_auto(command)
+
+        publish_mock.assert_called_once_with(Twist())
+        assert node.last_command_time is None
+
+        publish_mock.reset_mock()
+
+        # 명령 시각이 최신이어도 허가가 없으면 타이머가 정지시켜야 한다.
+        node.last_command_time = checked_at
+        node.check_timeout()
+
+        publish_mock.assert_called_once_with(Twist())
+        assert node.last_command_time is None

@@ -11,7 +11,16 @@ setup(
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/behavior_trees', glob('behavior_trees/*.xml')),
     ],
-    install_requires=['setuptools'], zip_safe=True,
-    maintainer='vehicle_team', maintainer_email='maintainer@example.com',
-    description='Vehicle route and behavior planning.', license='Apache-2.0',
+    entry_points={
+        'console_scripts': [
+            'goal_sender = vehicle_planning.goal_sender:main',
+        ],
+    },
+    install_requires=['setuptools'],
+    tests_require=['pytest'],
+    zip_safe=True,
+    maintainer='vehicle_team',
+    maintainer_email='maintainer@example.com',
+    description='Vehicle route and behavior planning.',
+    license='Apache-2.0',
 )

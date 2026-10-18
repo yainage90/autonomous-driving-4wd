@@ -93,11 +93,20 @@ def generate_launch_description():
         output='screen',
     )
 
+    goal_sender = Node(
+        package='vehicle_planning',
+        executable='goal_sender',
+        name='goal_sender',
+        parameters=[{'use_sim_time': True}],
+        output='screen',
+    )
+
     return LaunchDescription([
         autostart_argument,
         planner_server,
         controller_server,
         behavior_server,
         bt_navigator,
+        goal_sender,
         lifecycle_manager,
     ])

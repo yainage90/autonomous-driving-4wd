@@ -2,9 +2,17 @@ import time
 import uuid
 
 import pytest
+
+from unittest.mock import Mock
+
+from vehicle_planning.goal_sender import GoalSender, NavigationState
+
 import rclpy
-from geometry_msgs.msg import Twist
 from std_srvs.srv import SetBool
+from geometry_msgs.msg import TransformStamped, Twist
+from nav_msgs.msg import OccupancyGrid, Odometry
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
@@ -88,6 +96,28 @@ def ros_system():
         rclpy.shutdown()
 
 
+@pytest.fixture
+def navigation_permission(ros_system):
+    guard, _, _, _, executor, probe = ros_system
+
+    publisher = probe.create_publisher(
+        Bool, 'navigation_allowed', 1,
+    )
+    timer = probe.create_timer(
+        0.1,
+        lambda: publisher.publish(Bool(data=True)),
+    )
+
+    try:
+        assert wait_until(executor, guard._navigation_is_allowed), (
+            '주행 허가가 수신되지 않았습니다'
+        )
+        yield publisher, timer
+    finally:
+        probe.destroy_timer(timer)
+        probe.destroy_publisher(publisher)
+        
+        
 def test_normal_command_passes_through_topics(ros_system):
     guard, command_pub, output_sub, received, executor, probe = ros_system
 
@@ -346,7 +376,7 @@ def test_emergency_stop_release_waits_for_new_command(ros_system):
     ids=['manual_selected', 'auto_selected'],
 )
 def test_simultaneous_inputs_use_selected_mode(
-    ros_system, auto_enabled, expected_speed,
+    ros_system, navigation_permission, auto_enabled, expected_speed,
 ):
     guard, manual_pub, output_sub, received, executor, probe = ros_system
 
@@ -442,7 +472,7 @@ def test_simultaneous_inputs_use_selected_mode(
     ids=['manual_to_auto', 'auto_to_manual'],
 )
 def test_mode_switch_stops_until_new_selected_input(
-    ros_system, target_auto,
+    ros_system, navigation_permission, target_auto,
 ):
     guard, manual_pub, output_sub, received, executor, probe = ros_system
 
@@ -558,3 +588,152 @@ def test_mode_switch_stops_until_new_selected_input(
 
         probe.destroy_client(mode_client)
         probe.destroy_publisher(auto_pub)
+
+
+def test_scan_loss_stops_auto_commands_and_stays_stopped(
+    ros_system, monkeypatch,
+):
+    guard, _, _, received, executor, probe = ros_system
+    sender = GoalSender()
+    executor.add_node(sender)
+    timers = []
+
+    try:
+        guard.control_mode = 'auto'
+
+        scan_pub = probe.create_publisher(LaserScan, 'scan', 10)
+        odom_pub = probe.create_publisher(Odometry, 'odom', 10)
+        auto_pub = probe.create_publisher(Twist, 'cmd_vel_auto', 10)
+
+        # 지도와 TF는 정상인 조건으로 고정한다.
+        grid = OccupancyGrid()
+        grid.header.frame_id = 'map'
+        grid.info.resolution = 0.05
+        grid.info.width = grid.info.height = 1
+        grid.info.origin.orientation.w = 1.0
+        grid.data = [0]
+        sender._map_callback(grid)
+
+        def current_transform(*_args):
+            transform = TransformStamped()
+            transform.header.frame_id = 'map'
+            transform.child_frame_id = 'base_footprint'
+            transform.header.stamp = probe.get_clock().now().to_msg()
+            transform.transform.rotation.w = 1.0
+            return transform
+
+        tf_buffer = Mock()
+        tf_buffer.lookup_transform.side_effect = current_transform
+        tf_buffer.can_transform.return_value = True
+        monkeypatch.setattr(sender, '_tf_buffer', tf_buffer)
+
+        scan = LaserScan()
+        scan.header.frame_id = 'laser_frame'
+        scan.angle_min = -0.5
+        scan.angle_max = 0.5
+        scan.angle_increment = 0.5
+        scan.range_min = 0.1
+        scan.range_max = 10.0
+        scan.ranges = [1.0, 2.0, 3.0]
+
+        odom = Odometry()
+        odom.header.frame_id = 'odom'
+        odom.child_frame_id = 'base_footprint'
+        odom.pose.pose.orientation.w = 1.0
+
+        command = Twist()
+        command.linear.x = 0.1
+        sent_commands = 0
+
+        def publish_scan():
+            scan.header.stamp = probe.get_clock().now().to_msg()
+            scan_pub.publish(scan)
+
+        def publish_drive():
+            nonlocal sent_commands
+
+            odom.header.stamp = probe.get_clock().now().to_msg()
+            odom_pub.publish(odom)
+            auto_pub.publish(command)
+            sent_commands += 1
+
+        scan_timer = probe.create_timer(0.05, publish_scan)
+        timers.append(scan_timer)
+        timers.append(probe.create_timer(0.05, publish_drive))
+
+        assert wait_until(
+            executor,
+            lambda: (
+                auto_pub.get_subscription_count() >= 1
+                and guard.cmd_pub.get_subscription_count() >= 1
+                and sender._navigation_pub.get_subscription_count() >= 1
+                and sender._readiness_error() is None
+            ),
+        ), '센서와 명령 경로가 준비되지 않았습니다'
+
+        # 수락된 목표로 주행 중인 상태에서 시작한다.
+        goal_handle = Mock()
+        sender._goal_handle = goal_handle
+        sender._set_state(NavigationState.RUNNING)
+
+        assert wait_until(
+            executor,
+            lambda: any(msg == command for msg in received),
+        ), '정상 자율 명령이 전달되지 않았습니다'
+
+        received.clear()
+        sent_at_loss = sent_commands
+        scan_timer.cancel()
+
+        # odom과 속도 명령은 계속 발행하면서 scan만 중단한다.
+        assert wait_until(
+            executor,
+            lambda: sender._navigation_fault is not None,
+        ), 'scan 중단을 감지하지 못했습니다'
+
+        assert sender._navigation_fault.startswith('Scan ')
+        assert sender._sensor_is_fresh(
+            sender._odom_msg, sender._odom_received_at,
+        )
+        assert sent_commands - sent_at_loss >= 3
+        goal_handle.cancel_goal_async.assert_called_once_with()
+
+        assert wait_until(
+            executor,
+            lambda: any(msg == Twist() for msg in received),
+        ), 'scan 중단 후 정지 출력이 없습니다'
+
+        first_stop_index = next(
+            index for index, msg in enumerate(received)
+            if msg == Twist()
+        )
+
+        # scan을 복구해 모든 준비 조건이 다시 정상인지 확인한다.
+        scan_timer.reset()
+        assert wait_until(
+            executor,
+            lambda: sender._readiness_error() is None,
+        ), 'scan 수신이 복구되지 않았습니다'
+
+        sent_after_recovery = sent_commands
+        assert wait_until(
+            executor,
+            lambda: (
+                sent_commands - sent_after_recovery >= 5
+                and len(received[first_stop_index:]) >= 5
+            ),
+        ), '복구 후 명령과 출력이 충분히 관측되지 않았습니다'
+
+        assert sender._navigation_fault is not None
+        assert sender._state == NavigationState.CANCELING
+        assert all(
+            msg == Twist()
+            for msg in received[first_stop_index:]
+        ), 'scan 복구 후 주행 명령이 다시 전달됐습니다'
+
+    finally:
+        for timer in timers:
+            probe.destroy_timer(timer)
+
+        executor.remove_node(sender)
+        sender.destroy_node()
