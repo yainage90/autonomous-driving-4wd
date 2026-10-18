@@ -53,6 +53,18 @@ def generate_launch_description():
         output='screen',
     )
 
+    behavior_server = Node(
+        package='nav2_behaviors',
+        executable='behavior_server',
+        name='behavior_server',
+        parameters=[
+            nav2_params,
+            {'enable_stamped_cmd_vel': False},
+        ],
+        remappings=[('cmd_vel', 'cmd_vel_auto')],
+        output='screen',
+    )
+
     bt_navigator = Node(
         package='nav2_bt_navigator',
         executable='bt_navigator',
@@ -74,6 +86,7 @@ def generate_launch_description():
             'node_names': [
                 'planner_server',
                 'controller_server',
+                'behavior_server',
                 'bt_navigator',
             ],
         }],
@@ -84,6 +97,7 @@ def generate_launch_description():
         autostart_argument,
         planner_server,
         controller_server,
+        behavior_server,
         bt_navigator,
         lifecycle_manager,
     ])
