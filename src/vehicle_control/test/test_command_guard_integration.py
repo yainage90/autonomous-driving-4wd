@@ -62,14 +62,17 @@ def request_auto_mode(client, executor, enabled):
 def ros_system():
     # 다른 실행 중인 노드와 토픽·서비스 이름이 겹치지 않도록 분리
     namespace = f'/test_guard_{uuid.uuid4().hex}'
-    rclpy.init(args=['--ros-args', '-r', f'__ns:={namespace}'])
+    rclpy.init(args=[
+        '--ros-args',
+        '-r', f'__ns:={namespace}',
+        '-p', 'initial_mode:=manual'
+    ])
 
     nodes = []
     executor = SingleThreadedExecutor()
 
     try:
         guard = CommandGuard()
-        guard.control_mode = 'manual'
         nodes.append(guard)
 
         probe = Node('test_probe')

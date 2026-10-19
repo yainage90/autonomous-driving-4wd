@@ -25,6 +25,12 @@ def generate_launch_description():
         description='Use the simulation clock',
     )
 
+    amcl_params_argument = DeclareLaunchArgument(
+        'amcl_params_file',
+        default_value=str(localization_share / 'config' / 'amcl.yaml'),
+        description='AMCL parameter file',
+    )
+
     use_sim_time = ParameterValue(
         LaunchConfiguration('use_sim_time'),
         value_type=bool,
@@ -48,7 +54,7 @@ def generate_launch_description():
         executable='amcl',
         name='amcl',
         parameters=[
-            str(localization_share / 'config' / 'amcl.yaml'),
+            LaunchConfiguration('amcl_params_file'),
             {'use_sim_time': use_sim_time},
         ],
         output='screen',
@@ -69,6 +75,7 @@ def generate_launch_description():
     return LaunchDescription([
         map_argument,
         sim_time_argument,
+        amcl_params_argument,
         map_server,
         amcl,
         lifecycle_manager,

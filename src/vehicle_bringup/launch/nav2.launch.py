@@ -16,8 +16,18 @@ def generate_launch_description():
         get_package_share_directory('vehicle_control')
     )
 
-    nav2_params = str(planning_share / 'config' / 'nav2.yaml')
-    controller_params = str(control_share / 'config' / 'controller.yaml')
+    nav2_params_argument = DeclareLaunchArgument(
+        'nav2_params_file',
+        default_value=str(planning_share / 'config' / 'nav2.yaml'),
+        description='Nav2 parameter file',
+    )
+
+    controller_params_argument = DeclareLaunchArgument(
+        'controller_params_file',
+        default_value=str(control_share / 'config' / 'controller.yaml'),
+        description='Controller parameter file',
+    )
+
     bt_xml = str(
         planning_share / 'behavior_trees' / 'navigate_to_pose.xml'
     )
@@ -27,6 +37,7 @@ def generate_launch_description():
         default_value='true',
         description='Automatically activate navigation servers',
     )
+
     autostart = ParameterValue(
         LaunchConfiguration('autostart'),
         value_type=bool,
@@ -36,7 +47,7 @@ def generate_launch_description():
         package='nav2_planner',
         executable='planner_server',
         name='planner_server',
-        parameters=[nav2_params],
+        parameters=[LaunchConfiguration('nav2_params_file')],
         output='screen',
     )
 
@@ -45,8 +56,8 @@ def generate_launch_description():
         executable='controller_server',
         name='controller_server',
         parameters=[
-            nav2_params,
-            controller_params,
+            LaunchConfiguration('nav2_params_file'),
+            LaunchConfiguration('controller_params_file'),
             {'enable_stamped_cmd_vel': False},
         ],
         remappings=[('cmd_vel', 'cmd_vel_auto')],
@@ -58,7 +69,7 @@ def generate_launch_description():
         executable='behavior_server',
         name='behavior_server',
         parameters=[
-            nav2_params,
+            LaunchConfiguration('nav2_params_file'),
             {'enable_stamped_cmd_vel': False},
         ],
         remappings=[('cmd_vel', 'cmd_vel_auto')],
@@ -70,7 +81,7 @@ def generate_launch_description():
         executable='bt_navigator',
         name='bt_navigator',
         parameters=[
-            nav2_params,
+            LaunchConfiguration('nav2_params_file'),
             {'default_nav_to_pose_bt_xml': bt_xml},
         ],
         remappings=[
@@ -106,6 +117,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         autostart_argument,
+        nav2_params_argument,
+        controller_params_argument,
         planner_server,
         controller_server,
         behavior_server,

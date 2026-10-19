@@ -3,7 +3,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.conditions import LaunchConfigurationEquals
 
 
@@ -20,10 +20,19 @@ def generate_launch_description():
 
     world = LaunchConfiguration('world')
 
+    initial_mode = PythonExpression([
+        "'auto' if '",
+        LaunchConfiguration('mode'),
+        "' == 'navigation' else 'manual'",
+    ])
+
     command_guard = Node(
         package = 'vehicle_control',
         executable='command_guard',
-        parameters=[safety_config],
+        parameters=[
+            LaunchConfiguration('safety_params_file'),
+            {'initial_mode': initial_mode},
+        ],
         output='screen',
     )
 
@@ -38,7 +47,12 @@ def generate_launch_description():
     visualization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             launch_file_path=f'{description_share}/launch/rviz.launch.py'
-        )
+        ),
+        launch_arguments={
+            'fixed_frame': PythonExpression([
+                "'odom' if '", LaunchConfiguration('mode'), "' == 'manual' else 'map'",
+            ]),
+        }.items()
     )
 
     localization_share = get_package_share_directory('vehicle_localization')
@@ -46,8 +60,8 @@ def generate_launch_description():
     mode_argument = DeclareLaunchArgument(
         'mode',
         default_value='navigation',
-        choices=['mapping', 'navigation'],
-        description='Mapping or navigation mode',
+        choices=['manual', 'mapping', 'navigation'],
+        description='Manual driving, mapping or navigation mode',
     )
 
     map_argument = DeclareLaunchArgument(
@@ -62,6 +76,33 @@ def generate_launch_description():
         description='SLAM Toolbox parameter file',
     )
 
+    planning_share = get_package_share_directory('vehicle_planning')
+    control_share = get_package_share_directory('vehicle_control')
+
+    safety_params_argument = DeclareLaunchArgument(
+        'safety_params_file',
+        default_value=safety_config,
+        description='Command guard parameter file',
+    )
+
+    amcl_params_argument = DeclareLaunchArgument(
+        'amcl_params_file',
+        default_value=f'{localization_share}/config/amcl.yaml',
+        description='AMCL parameter file',
+    )
+
+    nav2_params_argument = DeclareLaunchArgument(
+        'nav2_params_file',
+        default_value=f'{planning_share}/config/nav2.yaml',
+        description='Nav2 parameter file',
+    )
+
+    controller_params_argument = DeclareLaunchArgument(
+        'controller_params_file',
+        default_value=f'{control_share}/config/controller.yaml',
+        description='Controller parameter file',
+    )
+
     localization = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             f'{localization_share}/launch/localization.launch.py'
@@ -69,6 +110,7 @@ def generate_launch_description():
         condition=LaunchConfigurationEquals('mode', 'navigation'),
         launch_arguments={
             'map': LaunchConfiguration('map'),
+            'amcl_params_file': LaunchConfiguration('amcl_params_file'),
             'use_sim_time': 'true',
         }.items(),
     )
@@ -90,6 +132,8 @@ def generate_launch_description():
         ),
         condition=LaunchConfigurationEquals('mode', 'navigation'),
         launch_arguments={
+            'nav2_params_file': LaunchConfiguration('nav2_params_file'),
+            'controller_params_file': LaunchConfiguration('controller_params_file'),
             'autostart': 'true',
         }.items(),
     )
@@ -100,6 +144,10 @@ def generate_launch_description():
             mode_argument,
             map_argument,
             slam_params_argument,
+            safety_params_argument,
+            amcl_params_argument,
+            nav2_params_argument,
+            controller_params_argument,
             simulation,
             visualization,
             command_guard,

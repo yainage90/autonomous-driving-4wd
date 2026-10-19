@@ -12,12 +12,16 @@ from vehicle_control.command_guard import CommandGuard
 
 @pytest.fixture
 def guard():
-    rclpy.init(args=[])
+    rclpy.init(
+        args=[
+            '--ros-args',
+            '-p', 'initial_mode:=manual',
+        ]
+    )
     node = None
 
     try:
         node = CommandGuard()
-        node.control_mode = 'manual'
 
         with patch.object(node.cmd_pub, 'publish') as publish_mock:
             yield node, publish_mock

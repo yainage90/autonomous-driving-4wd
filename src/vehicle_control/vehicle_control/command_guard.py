@@ -19,7 +19,11 @@ class CommandGuard(Node):
             10,
         )
 
-        self.control_mode = 'auto'
+        self.declare_parameter('initial_mode', 'auto')
+        self.control_mode = self.get_parameter('initial_mode').value
+
+        if self.control_mode not in ('manual', 'auto'):
+            raise ValueError('initial_mode must be manual or auto')
 
         self.cmd_sub_manual = self.create_subscription(
             Twist,
