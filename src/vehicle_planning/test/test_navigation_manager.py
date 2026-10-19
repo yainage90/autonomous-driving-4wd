@@ -162,6 +162,7 @@ def test_result_callback_preserves_goal_until_result_is_known(
         _start_stop_check=Mock(),
         _navigation_fault=None,
         _fail_navigation=Mock(),
+        _publish_event=Mock(),
     )
 
     sender._handle_result = lambda response: (
@@ -177,6 +178,13 @@ def test_result_callback_preserves_goal_until_result_is_known(
             NavigationState.STOPPING
         )
         sender._start_stop_check.assert_called_once_with()
+        sender._publish_event.assert_called_once_with(
+            'action_result',
+            status=GoalStatus.STATUS_CANCELED,
+            error_code=NavigateToPose.Result.NONE,
+            error_msg='',
+            outcome='canceled',
+        )
     else:
         assert sender._pending_result_state is None
         assert sender._goal_handle is goal_handle
@@ -184,6 +192,7 @@ def test_result_callback_preserves_goal_until_result_is_known(
         sender._set_state.assert_not_called()
         sender._start_stop_check.assert_not_called()
         sender._fail_navigation.assert_called_once()
+        sender._publish_event.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -381,6 +390,7 @@ def test_stop_timer_checks_fresh_observation(
         is_stop_confirmed=Mock(return_value=confirmed),
         _set_state=Mock(),
         get_logger=Mock(),
+        _publish_event=Mock(),
     )
     clock = Mock(return_value=10.0)
     monkeypatch.setattr(
@@ -478,6 +488,7 @@ def test_safety_fault_keeps_motion_blocked_after_data_recovers():
         _readiness_error=Mock(return_value=reason),
         cancel_goal=Mock(),
         get_logger=Mock(),
+        _publish_event=Mock(),
     )
 
     sender._request_safety_cancel = lambda: (
@@ -505,6 +516,10 @@ def test_safety_fault_keeps_motion_blocked_after_data_recovers():
         not call.args[0].data
         for call in sender._navigation_pub.publish.call_args_list
     )
+    sender._publish_event.assert_called_once_with(
+        'safety_failure',
+        reason=reason,
+    )
 
 
 def test_late_acceptance_after_fault_waits_for_result_and_stop():
@@ -515,6 +530,7 @@ def test_late_acceptance_after_fault_waits_for_result_and_stop():
         _navigation_pub=Mock(),
         is_stop_confirmed=Mock(return_value=False),
         get_logger=Mock(),
+        _publish_event=Mock(),
     )
     sender._set_state = lambda state: setattr(
         sender, '_state', state,

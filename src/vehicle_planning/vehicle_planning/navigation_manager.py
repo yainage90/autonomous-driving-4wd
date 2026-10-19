@@ -1,12 +1,13 @@
-import argparse
 import time
 import math
 from enum import Enum
+import json
+from uuid import uuid4
 
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
 from action_msgs.srv import CancelGoal
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import PoseStamped
@@ -165,6 +166,13 @@ class NavigationManager(Node):
 
         self._navigation_fault = None
 
+        self._observation_id = None
+        self._events_pub = self.create_publisher(
+            String,
+            '~/events',
+            100,
+        )
+
         self.get_logger().info(f'State: {self._state.value}')
 
         self._action_client = ActionClient(
@@ -238,6 +246,25 @@ class NavigationManager(Node):
             clock=self._steady_clock,
         )
 
+    def _publish_event(self, event: str, **data) -> None:
+        payload = {
+            'schema_version': 1,
+            'attempt_id': self._observation_id,
+            'event': event,
+            'ros_time_ns': self.get_clock().now().nanoseconds,
+            'wall_time_ns': time.time_ns(),
+            'monotonic_ns': time.monotonic_ns(),
+            'data': data,
+        }
+        message = String(
+            data=json.dumps(
+                payload,
+                ensure_ascii=False,
+                allow_nan=False,
+            ),
+        )
+        self._events_pub.publish(message)
+
     def send_goal(self, x: float, y: float, yaw: float):
         if self._state in (
             NavigationState.SENDING,
@@ -272,6 +299,16 @@ class NavigationManager(Node):
         self._pending_result_state = None
         self._result_error = None
         self._goal_response_deadline = time.monotonic() + 5.0
+
+        self._observation_id = uuid4().hex
+        self._publish_event(
+            'goal_submitted',
+            frame_id='map',
+            x=float(x),
+            y=float(y),
+            yaw=float(yaw),
+        )
+
         self._set_state(NavigationState.SENDING)
 
         future = self._action_client.send_goal_async(
@@ -347,6 +384,8 @@ class NavigationManager(Node):
         self._state = state
         self.get_logger().info(f'State: {state.value}')
 
+        self._publish_event('state_changed', state=state.value)
+
     def _goal_response_callback(self, future):
         self._goal_response_deadline = None
 
@@ -366,6 +405,11 @@ class NavigationManager(Node):
             )
 
     def _handle_goal_response(self, goal_handle):
+        self._publish_event(
+            'goal_response',
+            accepted=bool(goal_handle.accepted),
+        )
+
         if not goal_handle.accepted:
             self._set_state(NavigationState.FAILED)
             self.get_logger().error('Goal rejected')
@@ -392,6 +436,14 @@ class NavigationManager(Node):
         state = classify_result(
             response.status,
             response.result.error_code,
+        )
+
+        self._publish_event(
+            'action_result',
+            status=int(response.status),
+            error_code=int(response.result.error_code),
+            error_msg=response.result.error_msg,
+            outcome=state.value,
         )
 
         self._goal_handle = None
@@ -569,6 +621,12 @@ class NavigationManager(Node):
                 'Vehicle stop was not confirmed within 5.0 s'
             )
             self.get_logger().error(str(self._stop_error))
+
+            self._publish_event(
+                'stop_timeout',
+                reason=str(self._stop_error),
+            )
+
             self._stop_deadline = None
             return
 
@@ -674,6 +732,10 @@ class NavigationManager(Node):
 
         self._navigation_fault = reason
         self._navigation_pub.publish(Bool(data=False))
+        self._publish_event(
+            'safety_failure',
+            reason=reason,
+        )
         self.get_logger().error(
             f'Navigation safety failure: {reason}'
         )
