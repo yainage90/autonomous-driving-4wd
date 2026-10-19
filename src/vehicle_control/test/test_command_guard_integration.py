@@ -5,7 +5,7 @@ import pytest
 
 from unittest.mock import Mock
 
-from vehicle_planning.goal_sender import GoalSender, NavigationState
+from vehicle_planning.navigation_manager import NavigationManager, NavigationState
 
 import rclpy
 from std_srvs.srv import SetBool
@@ -594,7 +594,7 @@ def test_scan_loss_stops_auto_commands_and_stays_stopped(
     ros_system, monkeypatch,
 ):
     guard, _, _, received, executor, probe = ros_system
-    sender = GoalSender()
+    sender = NavigationManager()
     executor.add_node(sender)
     timers = []
 

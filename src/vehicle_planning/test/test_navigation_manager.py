@@ -8,13 +8,15 @@ from action_msgs.srv import CancelGoal
 from nav2_msgs.action import NavigateToPose
 from std_srvs.srv import Trigger
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
 
-from vehicle_planning.goal_sender import (
+from vehicle_planning.navigation_manager import (
     NavigationState,
     build_goal,
     classify_result,
-    GoalSender,
+    NavigationManager,
     is_stationary,
+    goal_pose_to_xy_yaw,
 )
 
 
@@ -107,7 +109,7 @@ def test_send_goal_rejects_new_goal_while_busy(state):
     )
 
     with pytest.raises(RuntimeError, match='cancel'):
-        GoalSender.send_goal(sender, 1.0, 2.0, 0.0)
+        NavigationManager.send_goal(sender, 1.0, 2.0, 0.0)
 
     action_client.server_is_ready.assert_not_called()
     action_client.send_goal_async.assert_not_called()
@@ -122,7 +124,7 @@ def test_cancel_goal_requests_cancellation_and_keeps_handle():
         _set_state=Mock(),
     )
 
-    cancel_future = GoalSender.cancel_goal(sender)
+    cancel_future = NavigationManager.cancel_goal(sender)
 
     goal_handle.cancel_goal_async.assert_called_once_with()
     assert cancel_future is goal_handle.cancel_goal_async.return_value
@@ -163,10 +165,10 @@ def test_result_callback_preserves_goal_until_result_is_known(
     )
 
     sender._handle_result = lambda response: (
-        GoalSender._handle_result(sender, response)
+        NavigationManager._handle_result(sender, response)
     )
 
-    GoalSender._result_callback(sender, future)
+    NavigationManager._result_callback(sender, future)
 
     if result_error is None:
         assert sender._pending_result_state == NavigationState.CANCELED
@@ -228,7 +230,7 @@ def test_handle_cancel_response(
     future = Mock()
     future.result.return_value = response
 
-    GoalSender._handle_cancel_response(sender, future, goal_handle)
+    NavigationManager._handle_cancel_response(sender, future, goal_handle)
 
     if expected_state_change is None:
         sender._set_state.assert_not_called()
@@ -250,7 +252,7 @@ def test_cancel_callback_reports_request_outcome(error):
     )
     response = Trigger.Response()
 
-    returned = GoalSender._cancel_callback(
+    returned = NavigationManager._cancel_callback(
         sender, Trigger.Request(), response
     )
 
@@ -312,12 +314,12 @@ def test_stop_confirmation_requires_continuous_fresh_odometry(
         get_clock=Mock(),
     )
     sender._sensor_is_fresh = lambda msg, received_at: (
-        GoalSender._sensor_is_fresh(sender, msg, received_at)
+        NavigationManager._sensor_is_fresh(sender, msg, received_at)
     )
 
     clock = Mock(return_value=0.0)
     monkeypatch.setattr(
-        'vehicle_planning.goal_sender.time.monotonic',
+        'vehicle_planning.navigation_manager.time.monotonic',
         clock,
     )
 
@@ -334,7 +336,7 @@ def test_stop_confirmation_requires_continuous_fresh_odometry(
         sender.get_clock.return_value.now.return_value.nanoseconds = (
             stamp_ns + measurement_delay_ns
         )
-        GoalSender._odom_callback(sender, msg)
+        NavigationManager._odom_callback(sender, msg)
 
     for index in range(11):
         receive(
@@ -342,22 +344,22 @@ def test_stop_confirmation_requires_continuous_fresh_odometry(
             index / 10,
         )
         expected = index == 10 and measurement_delay_ns == 0
-        assert GoalSender.is_stop_confirmed(sender) is expected
+        assert NavigationManager.is_stop_confirmed(sender) is expected
 
     # 최근 수신했어도 ROS 시간 기준으로 오래되면 확인을 무효로 한다.
     if measurement_delay_ns == 0:
         sender.get_clock.return_value.now.return_value.nanoseconds += (
             600_000_000
         )
-        assert not GoalSender.is_stop_confirmed(sender)
+        assert not NavigationManager.is_stop_confirmed(sender)
 
     # 수신이 중단돼도 확인을 무효로 한다.
     clock.return_value = 1.6
-    assert not GoalSender.is_stop_confirmed(sender)
+    assert not NavigationManager.is_stop_confirmed(sender)
 
     # 수신 재개 후 정지 유지 시간을 새로 계산한다.
     receive(3_000_000_000, 1.6)
-    assert not GoalSender.is_stop_confirmed(sender)
+    assert not NavigationManager.is_stop_confirmed(sender)
     
 
 @pytest.mark.parametrize(
@@ -382,18 +384,18 @@ def test_stop_timer_checks_fresh_observation(
     )
     clock = Mock(return_value=10.0)
     monkeypatch.setattr(
-        'vehicle_planning.goal_sender.time.monotonic',
+        'vehicle_planning.navigation_manager.time.monotonic',
         clock,
     )
 
-    GoalSender._start_stop_check(sender)
+    NavigationManager._start_stop_check(sender)
 
     assert sender._stationary_since_ns is None
     assert sender._last_odom_stamp_ns is None
     assert sender._last_odom_received_at is None
 
     clock.return_value = checked_at
-    GoalSender._check_state(sender)
+    NavigationManager._check_state(sender)
 
     assert sender._stop_deadline is None
 
@@ -418,7 +420,7 @@ def test_goal_response_error_keeps_acceptance_unknown():
     future = Mock()
     future.result.side_effect = RuntimeError('response unavailable')
 
-    GoalSender._goal_response_callback(sender, future)
+    NavigationManager._goal_response_callback(sender, future)
 
     assert sender._state == NavigationState.SENDING
     assert sender._result_future is None
@@ -433,12 +435,12 @@ def test_goal_response_timeout_keeps_new_goals_blocked(monkeypatch):
         _fail_navigation=Mock(),
     )
     monkeypatch.setattr(
-        'vehicle_planning.goal_sender.time.monotonic',
+        'vehicle_planning.navigation_manager.time.monotonic',
         Mock(return_value=5.0),
     )
 
-    GoalSender._check_state(sender)
-    GoalSender._check_state(sender)
+    NavigationManager._check_state(sender)
+    NavigationManager._check_state(sender)
 
     assert sender._state == NavigationState.SENDING
     assert sender._goal_response_deadline is None
@@ -460,7 +462,7 @@ def test_send_goal_rejects_unready_navigation():
     )
 
     with pytest.raises(TimeoutError, match='Navigation TF'):
-        GoalSender.send_goal(sender, 1.0, 2.0, 0.0)
+        NavigationManager.send_goal(sender, 1.0, 2.0, 0.0)
 
     action_client.send_goal_async.assert_not_called()
     assert sender._state == NavigationState.WAITING
@@ -479,22 +481,22 @@ def test_safety_fault_keeps_motion_blocked_after_data_recovers():
     )
 
     sender._request_safety_cancel = lambda: (
-        GoalSender._request_safety_cancel(sender)
+        NavigationManager._request_safety_cancel(sender)
     )
     sender._fail_navigation = lambda error: (
-        GoalSender._fail_navigation(sender, error)
+        NavigationManager._fail_navigation(sender, error)
     )
 
     # 주행 중 이상을 발견하면 허가를 차단하고 취소를 요청한다.
-    GoalSender._check_navigation_safety(sender)
+    NavigationManager._check_navigation_safety(sender)
 
     assert sender._navigation_fault == reason
     sender.cancel_goal.assert_called_once_with()
 
     # 데이터가 복구돼도 같은 목표의 주행 허가를 복원하지 않는다.
     sender._readiness_error.return_value = None
-    GoalSender._check_navigation_safety(sender)
-    GoalSender._check_navigation_safety(sender)
+    NavigationManager._check_navigation_safety(sender)
+    NavigationManager._check_navigation_safety(sender)
 
     assert sender._navigation_fault == reason
     sender.cancel_goal.assert_called_once_with()
@@ -517,16 +519,16 @@ def test_late_acceptance_after_fault_waits_for_result_and_stop():
     sender._set_state = lambda state: setattr(
         sender, '_state', state,
     )
-    sender.cancel_goal = lambda: GoalSender.cancel_goal(sender)
+    sender.cancel_goal = lambda: NavigationManager.cancel_goal(sender)
     sender._request_safety_cancel = lambda: (
-        GoalSender._request_safety_cancel(sender)
+        NavigationManager._request_safety_cancel(sender)
     )
 
     # 안전 오류 발생 후 늦게 수락된 목표도 취소한다.
     goal_handle = Mock()
     goal_handle.accepted = True
 
-    result_future = GoalSender._handle_goal_response(
+    result_future = NavigationManager._handle_goal_response(
         sender, goal_handle,
     )
 
@@ -540,37 +542,97 @@ def test_late_acceptance_after_fault_waits_for_result_and_stop():
         return_code=CancelGoal.Response.ERROR_REJECTED,
         goals_canceling=[],
     )
-    GoalSender._handle_cancel_response(
+    NavigationManager._handle_cancel_response(
         sender, cancel_future, goal_handle,
     )
 
     assert sender._state == NavigationState.CANCELING
-    GoalSender._check_navigation_safety(sender)
+    NavigationManager._check_navigation_safety(sender)
 
     # Nav2의 취소 결과는 안전 오류 때문에 최종 실패로 분류한다.
     response = SimpleNamespace(
         status=GoalStatus.STATUS_CANCELED,
         result=NavigateToPose.Result(),
     )
-    sender._pending_result_state = GoalSender._handle_result(
+    sender._pending_result_state = NavigationManager._handle_result(
         sender, response,
     )
 
     assert sender._pending_result_state == NavigationState.FAILED
     assert sender._state == NavigationState.STOPPING
 
-    GoalSender._start_stop_check(sender)
-    GoalSender._check_state(sender)
+    NavigationManager._start_stop_check(sender)
+    NavigationManager._check_state(sender)
 
     assert sender._state == NavigationState.STOPPING
 
     # 실제 정지를 확인한 뒤에만 FAILED로 종료한다.
     sender.is_stop_confirmed.return_value = True
-    GoalSender._check_state(sender)
+    NavigationManager._check_state(sender)
 
     assert sender._state == NavigationState.FAILED
-    GoalSender._check_navigation_safety(sender)
+    NavigationManager._check_navigation_safety(sender)
     assert all(
         not call.args[0].data
         for call in sender._navigation_pub.publish.call_args_list
     )
+
+
+def test_goal_pose_converts_position_and_heading():
+    msg = PoseStamped()
+    msg.header.frame_id = 'map'
+    msg.pose.position.x = 1.0
+    msg.pose.position.y = -2.0
+    msg.pose.orientation.z = math.sin(math.pi / 4.0)
+    msg.pose.orientation.w = math.cos(math.pi / 4.0)
+
+    assert goal_pose_to_xy_yaw(msg) == pytest.approx(
+        (1.0, -2.0, math.pi / 2.0)
+    )
+
+
+@pytest.mark.parametrize('invalid_case', [
+    'wrong_frame',
+    'non_finite',
+    'zero_quaternion',
+    'non_planar',
+])
+def test_invalid_goal_pose_is_not_submitted(invalid_case):
+    msg = PoseStamped()
+    msg.header.frame_id = 'map'
+    msg.pose.orientation.w = 1.0
+
+    if invalid_case == 'wrong_frame':
+        msg.header.frame_id = 'odom'
+    elif invalid_case == 'non_finite':
+        msg.pose.position.x = float('nan')
+    elif invalid_case == 'zero_quaternion':
+        msg.pose.orientation.w = 0.0
+    elif invalid_case == 'non_planar':
+        msg.pose.position.z = 1.0
+
+    sender = SimpleNamespace(
+        send_goal=Mock(),
+        get_logger=Mock(),
+    )
+
+    NavigationManager._goal_pose_callback(sender, msg)
+
+    sender.send_goal.assert_not_called()
+    sender.get_logger.return_value.warning.assert_called_once()
+
+
+def test_goal_pose_busy_rejection_is_logged():
+    msg = PoseStamped()
+    msg.header.frame_id = 'map'
+    msg.pose.orientation.w = 1.0
+
+    sender = SimpleNamespace(
+        send_goal=Mock(side_effect=RuntimeError('Navigation is busy')),
+        get_logger=Mock(),
+    )
+
+    NavigationManager._goal_pose_callback(sender, msg)
+
+    sender.send_goal.assert_called_once_with(0.0, 0.0, 0.0)
+    sender.get_logger.return_value.warning.assert_called_once()

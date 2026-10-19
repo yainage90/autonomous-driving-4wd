@@ -13,7 +13,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'goal_sender = vehicle_planning.goal_sender:main',
+            'navigation_manager = vehicle_planning.navigation_manager:main',
         ],
     },
     install_requires=['setuptools'],

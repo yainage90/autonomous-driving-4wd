@@ -9,6 +9,7 @@ from action_msgs.srv import CancelGoal
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from nav_msgs.msg import Odometry, OccupancyGrid
+from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import LaserScan
 
 import rclpy
@@ -90,9 +91,57 @@ def is_stationary(
     )
     
 
-class GoalSender(Node):
+def goal_pose_to_xy_yaw(msg: PoseStamped) -> tuple[float, float, float]:
+    if msg.header.frame_id != 'map':
+        raise ValueError('Goal frame must be map')
+
+    position = msg.pose.position
+    orientation = msg.pose.orientation
+
+    values = (
+        position.x,
+        position.y,
+        position.z,
+        orientation.x,
+        orientation.y,
+        orientation.z,
+        orientation.w,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError('Goal pose must contain finite numbers')
+
+    norm = math.hypot(
+        orientation.x,
+        orientation.y,
+        orientation.z,
+        orientation.w,
+    )
+    if not math.isclose(norm, 1.0, rel_tol=0.0, abs_tol=1e-3):
+        raise ValueError('Goal orientation must be a unit quaternion')
+
+    qx = orientation.x / norm
+    qy = orientation.y / norm
+    qz = orientation.z / norm
+    qw = orientation.w / norm
+
+    if (
+        abs(position.z) > 1e-6
+        or abs(qx) > 1e-6
+        or abs(qy) > 1e-6
+    ):
+        raise ValueError('Goal must be a planar pose')
+
+    yaw = math.atan2(
+        2.0 * (qw * qz + qx * qy),
+        1.0 - 2.0 * (qy * qy + qz * qz),
+    )
+
+    return position.x, position.y, yaw
+
+
+class NavigationManager(Node):
     def __init__(self):
-        super().__init__('goal_sender')
+        super().__init__('navigation_manager')
 
         self._state = NavigationState.WAITING
         self._goal_handle = None
@@ -128,6 +177,13 @@ class GoalSender(Node):
             SetNavigationGoal,
             '~/set_goal',
             self._goal_callback,
+        )
+
+        self._goal_pose_subscription = self.create_subscription(
+            PoseStamped,
+            'goal_pose',
+            self._goal_pose_callback,
+            10,
         )
                 
         self._cancel_service = self.create_service(
@@ -236,6 +292,20 @@ class GoalSender(Node):
         response.success = True
         response.message = 'Goal submitted; waiting for Nav2 acceptance'
         return response
+
+    def _goal_pose_callback(self, msg: PoseStamped):
+        try:
+            x, y, yaw = goal_pose_to_xy_yaw(msg)
+            self.send_goal(x, y, yaw)
+        except (ValueError, TimeoutError, RuntimeError) as exc:
+            self.get_logger().warning(
+                f'Goal pose rejected: {exc}'
+            )
+            return
+
+        self.get_logger().info(
+            'Goal pose submitted; waiting for Nav2 acceptance'
+        )
 
     def cancel_goal(self):
         if (
@@ -628,7 +698,7 @@ class GoalSender(Node):
 
 def main():
     rclpy.init()
-    node = GoalSender()
+    node = NavigationManager()
 
     try:
         rclpy.spin(node)

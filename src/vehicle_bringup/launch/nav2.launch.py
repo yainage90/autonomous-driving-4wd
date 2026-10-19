@@ -73,6 +73,9 @@ def generate_launch_description():
             nav2_params,
             {'default_nav_to_pose_bt_xml': bt_xml},
         ],
+        remappings=[
+            ('goal_pose', 'nav2_internal/goal_pose')
+        ],
         output='screen',
     )
 
@@ -93,10 +96,10 @@ def generate_launch_description():
         output='screen',
     )
 
-    goal_sender = Node(
+    navigation_manager = Node(
         package='vehicle_planning',
-        executable='goal_sender',
-        name='goal_sender',
+        executable='navigation_manager',
+        name='navigation_manager',
         parameters=[{'use_sim_time': True}],
         output='screen',
     )
@@ -107,6 +110,6 @@ def generate_launch_description():
         controller_server,
         behavior_server,
         bt_navigator,
-        goal_sender,
+        navigation_manager,
         lifecycle_manager,
     ])
