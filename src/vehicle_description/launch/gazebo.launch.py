@@ -51,10 +51,19 @@ def generate_launch_description():
             '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
             '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
             '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
-            '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
             '/ground_truth/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
         ],
         output='screen'
+    )
+
+    scan_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='scan_bridge',
+        arguments=[
+            '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+        ],
+        output='screen',
     )
 
     # Gazebo Harmonic 실행 (empty.sdf 월드)
@@ -86,6 +95,7 @@ def generate_launch_description():
         world_argument,
         robot_state_publisher_node,
         bridge,
+        scan_bridge,
         gazebo,
         spawn_entity,
     ])
