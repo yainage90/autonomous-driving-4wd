@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ActuatorCommand.msg"
   "msg/ActuatorStatus.msg"
   "msg/NavigationPermission.msg"
+  "msg/NavigationRecoveryStatus.msg"
   "msg/NavigationCommand.msg"
   "srv/RegisterNavigation.srv"
   "srv/SetNavigationGoal.srv"
