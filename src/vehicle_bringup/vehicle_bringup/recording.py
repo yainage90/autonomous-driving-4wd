@@ -67,6 +67,9 @@ TOPICS = [
     '/cmd_vel_auto',
     '/cmd_vel',
     '/navigation_allowed',
+    '/control_state',
+    '/navigation_permission',
+    '/navigation_command',
     '/navigation_manager/events',
     '/rosout',
 ]

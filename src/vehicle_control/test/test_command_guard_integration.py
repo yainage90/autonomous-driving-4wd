@@ -9,7 +9,9 @@ from vehicle_planning.navigation_manager import NavigationManager, NavigationSta
 
 import rclpy
 from std_srvs.srv import SetBool
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import TransformStamped, Twist, TwistStamped
+from vehicle_interfaces.msg import NavigationCommand, NavigationPermission
+from vehicle_interfaces.srv import RegisterNavigation
 from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
@@ -55,6 +57,8 @@ def request_auto_mode(client, executor, enabled):
     response = future.result()
     assert response is not None
     assert response.success is True
+    if enabled and getattr(executor, '_test_permits', False):
+        assert wait_until(executor, executor._test_guard._navigation_is_allowed)
 
 
 
@@ -99,28 +103,54 @@ def ros_system():
         rclpy.shutdown()
 
 
+class SessionPublisher:
+    """Exercise the guard transport using a simulated accepted goal."""
+    def __init__(self, probe, guard):
+        self.probe = probe
+        self.guard = guard
+        self.publisher = probe.create_publisher(NavigationCommand, 'navigation_command', 10)
+
+    def get_subscription_count(self):
+        return self.publisher.get_subscription_count()
+
+    def publish(self, twist):
+        stamped = TwistStamped(twist=twist)
+        stamped.header.stamp = self.probe.get_clock().now().to_msg()
+        self.publisher.publish(NavigationCommand(
+            permission=self.guard._permission or NavigationPermission(), command=stamped,
+        ))
+
+
 @pytest.fixture
 def navigation_permission(ros_system):
     guard, _, _, _, executor, probe = ros_system
-
-    publisher = probe.create_publisher(
-        Bool, 'navigation_allowed', 1,
+    guard.on_register_navigation(
+        RegisterNavigation.Request(manager_session='test_manager'),
+        RegisterNavigation.Response(),
     )
-    timer = probe.create_timer(
-        0.1,
-        lambda: publisher.publish(Bool(data=True)),
-    )
+    publisher = probe.create_publisher(NavigationPermission, 'navigation_permission', 1)
+    sequence = 0
 
+    def publish_permit():
+        nonlocal sequence
+        sequence += 1
+        publisher.publish(NavigationPermission(
+            guard_session=guard._guard_session, manager_session=guard._manager_session,
+            epoch=guard._epoch, heartbeat=guard._heartbeat,
+            sequence=sequence, goal_id='simulated_new_goal', allowed=True,
+        ))
+
+    timer = probe.create_timer(0.05, publish_permit)
+    executor._test_permits = True
+    executor._test_guard = guard
     try:
-        assert wait_until(executor, guard._navigation_is_allowed), (
-            '주행 허가가 수신되지 않았습니다'
-        )
         yield publisher, timer
     finally:
+        executor._test_permits = False
         probe.destroy_timer(timer)
         probe.destroy_publisher(publisher)
-        
-        
+
+
 def test_normal_command_passes_through_topics(ros_system):
     guard, command_pub, output_sub, received, executor, probe = ros_system
 
@@ -383,9 +413,7 @@ def test_simultaneous_inputs_use_selected_mode(
 ):
     guard, manual_pub, output_sub, received, executor, probe = ros_system
 
-    auto_pub = probe.create_publisher(
-        Twist, 'cmd_vel_auto', 10,
-    )
+    auto_pub = SessionPublisher(probe, guard)
     mode_client = probe.create_client(
         SetBool, 'set_auto_mode',
     )
@@ -466,7 +494,7 @@ def test_simultaneous_inputs_use_selected_mode(
             probe.destroy_timer(command_timer)
 
         probe.destroy_client(mode_client)
-        probe.destroy_publisher(auto_pub)
+        probe.destroy_publisher(auto_pub.publisher)
 
 
 @pytest.mark.parametrize(
@@ -479,9 +507,7 @@ def test_mode_switch_stops_until_new_selected_input(
 ):
     guard, manual_pub, output_sub, received, executor, probe = ros_system
 
-    auto_pub = probe.create_publisher(
-        Twist, 'cmd_vel_auto', 10,
-    )
+    auto_pub = SessionPublisher(probe, guard)
     mode_client = probe.create_client(
         SetBool, 'set_auto_mode',
     )
@@ -590,7 +616,7 @@ def test_mode_switch_stops_until_new_selected_input(
             probe.destroy_timer(old_timer)
 
         probe.destroy_client(mode_client)
-        probe.destroy_publisher(auto_pub)
+        probe.destroy_publisher(auto_pub.publisher)
 
 
 def test_scan_loss_stops_auto_commands_and_stays_stopped(
@@ -606,7 +632,7 @@ def test_scan_loss_stops_auto_commands_and_stays_stopped(
 
         scan_pub = probe.create_publisher(LaserScan, 'scan', 10)
         odom_pub = probe.create_publisher(Odometry, 'odom', 10)
-        auto_pub = probe.create_publisher(Twist, 'cmd_vel_auto', 10)
+        auto_pub = probe.create_publisher(TwistStamped, 'cmd_vel_auto', 10)
 
         # 지도와 TF는 정상인 조건으로 고정한다.
         grid = OccupancyGrid()
@@ -657,7 +683,9 @@ def test_scan_loss_stops_auto_commands_and_stays_stopped(
 
             odom.header.stamp = probe.get_clock().now().to_msg()
             odom_pub.publish(odom)
-            auto_pub.publish(command)
+            stamped = TwistStamped(twist=command)
+            stamped.header.stamp = probe.get_clock().now().to_msg()
+            auto_pub.publish(stamped)
             sent_commands += 1
 
         scan_timer = probe.create_timer(0.05, publish_scan)
@@ -669,7 +697,8 @@ def test_scan_loss_stops_auto_commands_and_stays_stopped(
             lambda: (
                 auto_pub.get_subscription_count() >= 1
                 and guard.cmd_pub.get_subscription_count() >= 1
-                and sender._navigation_pub.get_subscription_count() >= 1
+                and sender._permission_pub.get_subscription_count() >= 1
+                and sender._control_error() is None
                 and sender._readiness_error() is None
             ),
         ), '센서와 명령 경로가 준비되지 않았습니다'
@@ -677,6 +706,9 @@ def test_scan_loss_stops_auto_commands_and_stays_stopped(
         # 수락된 목표로 주행 중인 상태에서 시작한다.
         goal_handle = Mock()
         sender._goal_handle = goal_handle
+        sender._goal_control = (sender._control_state.guard_session, sender._control_state.epoch)
+        sender._observation_id = 'scan_loss_test'
+        sender._command_start_ns = probe.get_clock().now().nanoseconds
         sender._set_state(NavigationState.RUNNING)
 
         assert wait_until(

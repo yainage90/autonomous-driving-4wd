@@ -10,7 +10,7 @@ from action_msgs.srv import CancelGoal
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from nav_msgs.msg import Odometry, OccupancyGrid
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from sensor_msgs.msg import LaserScan
 
 import rclpy
@@ -24,7 +24,12 @@ from rclpy.clock_type import ClockType
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from vehicle_interfaces.srv import SetNavigationGoal
+from vehicle_interfaces.srv import SetNavigationGoal, RegisterNavigation
+from vehicle_interfaces.msg import (
+    ControlState,
+    NavigationCommand,
+    NavigationPermission,
+)
 
 from vehicle_planning.readiness import (
     is_data_fresh,
@@ -157,6 +162,7 @@ class NavigationManager(Node):
         self._last_odom_stamp_ns = None
         self._last_odom_received_at = None
         self._goal_response_deadline = None
+        self._cancel_deadline = None
 
         self._map_valid = False
         self._scan_msg = None
@@ -165,6 +171,31 @@ class NavigationManager(Node):
         self._odom_received_at = None
 
         self._navigation_fault = None
+        self._manager_session = uuid4().hex
+        self._control_state = None
+        self._control_received_at = None
+        self._retired_guard_sessions = set()
+        self._registration_future = None
+        self._goal_control = None
+        self._command_start_ns = None
+        self._last_ros_time_ns = None
+        self._permission_sequence = 0
+
+        self._control_subscription = self.create_subscription(
+            ControlState, 'control_state', self._control_callback, 1,
+        )
+        self._register_client = self.create_client(
+            RegisterNavigation, 'register_navigation',
+        )
+        self._permission_pub = self.create_publisher(
+            NavigationPermission, 'navigation_permission', 1,
+        )
+        self._command_pub = self.create_publisher(
+            NavigationCommand, 'navigation_command', 1,
+        )
+        self._command_subscription = self.create_subscription(
+            TwistStamped, 'cmd_vel_auto', self._auto_command_callback, 1,
+        )
 
         self._observation_id = None
         self._events_pub = self.create_publisher(
@@ -285,6 +316,12 @@ class NavigationManager(Node):
         if readiness_error is not None:
             raise TimeoutError(readiness_error)
 
+        control_error = self._control_error()
+        if control_error is not None:
+            raise RuntimeError(control_error)
+        if not self.is_stop_confirmed():
+            raise RuntimeError('Vehicle must be confirmed stationary before a new goal')
+
         now = self.get_clock().now()
         if (
             self.get_parameter('use_sim_time').value
@@ -300,6 +337,10 @@ class NavigationManager(Node):
         self._result_error = None
         self._goal_response_deadline = time.monotonic() + 5.0
 
+        self._goal_control = (
+            self._control_state.guard_session, self._control_state.epoch,
+        )
+        self._command_start_ns = None
         self._observation_id = uuid4().hex
         self._publish_event(
             'goal_submitted',
@@ -354,6 +395,7 @@ class NavigationManager(Node):
         goal_handle = self._goal_handle
         cancel_future = goal_handle.cancel_goal_async()
         self._set_state(NavigationState.CANCELING)
+        self._cancel_deadline = time.monotonic() + 5.0
 
         cancel_future.add_done_callback(
             lambda future: self._handle_cancel_response(
@@ -382,6 +424,9 @@ class NavigationManager(Node):
             return
 
         self._state = state
+        if state != NavigationState.RUNNING:
+            self._navigation_pub.publish(Bool(data=False))
+            self._permission_pub.publish(self._make_permission(False))
         self.get_logger().info(f'State: {state.value}')
 
         self._publish_event('state_changed', state=state.value)
@@ -418,6 +463,7 @@ class NavigationManager(Node):
         self._goal_handle = goal_handle
         self._last_feedback_log_time = None
 
+        self._command_start_ns = self.get_clock().now().nanoseconds
         self.get_logger().info('Goal accepted')
         self._set_state(NavigationState.RUNNING)
 
@@ -447,6 +493,7 @@ class NavigationManager(Node):
         )
 
         self._goal_handle = None
+        self._cancel_deadline = None
         self.get_logger().info(f'Action result: {state.value}')
         self._set_state(NavigationState.STOPPING)
 
@@ -479,6 +526,9 @@ class NavigationManager(Node):
 
         if response.return_code == CancelGoal.Response.ERROR_REJECTED:
             self.get_logger().warning('Cancellation rejected')
+            self._publish_event(
+                'cancel_rejected', safety_fault=self._navigation_fault,
+            )
             if self._navigation_fault is None:
                 self._set_state(NavigationState.RUNNING)
             return
@@ -599,6 +649,20 @@ class NavigationManager(Node):
         self._stop_deadline = time.monotonic() + 5.0
 
     def _check_state(self):
+        if self._state == NavigationState.CANCELING:
+            if (
+                self._cancel_deadline is not None
+                and time.monotonic() >= self._cancel_deadline
+            ):
+                self._cancel_deadline = None
+                reason = (
+                    'Cancellation timed out; waiting for the final action result '
+                    '(issue 004)'
+                )
+                self._publish_event('cancel_timeout', reason=reason)
+                self.get_logger().error(reason)
+                self._fail_navigation(reason)
+            return
         if self._state == NavigationState.SENDING:
             if (
                 self._goal_response_deadline is not None
@@ -707,7 +771,106 @@ class NavigationManager(Node):
 
         return None
 
+    def _control_callback(self, msg):
+        if not msg.guard_session or msg.guard_session in self._retired_guard_sessions:
+            return
+        previous = self._control_state
+        if previous is not None:
+            if msg.guard_session == previous.guard_session:
+                if msg.heartbeat <= previous.heartbeat or msg.epoch < previous.epoch:
+                    return
+            else:
+                self._retired_guard_sessions.add(previous.guard_session)
+        self._control_state = msg
+        self._control_received_at = time.monotonic()
+        reason = self._control_error()
+        if self._state in (
+            NavigationState.SENDING,
+            NavigationState.RUNNING,
+            NavigationState.CANCELING,
+        ) and reason is not None:
+            self._fail_navigation(reason)
+
+    def _control_error(self):
+        control = self._control_state
+        if (
+            control is None or self._control_received_at is None
+            or not 0 <= time.monotonic() - self._control_received_at < 0.5
+        ):
+            return 'Control state is unavailable or stale'
+        if control.manager_session != self._manager_session:
+            return 'Navigation manager session is not registered'
+        if control.navigation_reset_required:
+            return 'Manager restarted; restart Nav2 and command_guard together (issue 004)'
+        if control.emergency_stop or not control.auto_mode:
+            return 'Autonomous control is disabled'
+        if self._state in (
+            NavigationState.SENDING,
+            NavigationState.RUNNING,
+            NavigationState.CANCELING,
+        ) and self._goal_control != (control.guard_session, control.epoch):
+            return 'Control session changed; a new goal is required'
+        return None
+
+    def _ensure_registration(self):
+        if self._registration_future is not None:
+            if not self._registration_future.done():
+                return
+            try:
+                self._registration_future.result()
+            except Exception as exc:
+                self.get_logger().warning(f'Control registration failed: {exc}')
+            self._registration_future = None
+        if (
+            self._control_state is not None
+            and self._control_state.manager_session == self._manager_session
+        ):
+            return
+        if self._register_client.service_is_ready():
+            self._registration_future = self._register_client.call_async(
+                RegisterNavigation.Request(manager_session=self._manager_session),
+            )
+
+    def _make_permission(self, allowed):
+        self._permission_sequence += 1
+        control = self._control_state
+        return NavigationPermission(
+            guard_session=control.guard_session if control else '',
+            manager_session=self._manager_session,
+            epoch=control.epoch if control else 0,
+            heartbeat=control.heartbeat if control else 0,
+            sequence=self._permission_sequence,
+            goal_id=self._observation_id or '',
+            allowed=allowed,
+        )
+
+    def _auto_command_callback(self, msg):
+        if (
+            self._state != NavigationState.RUNNING
+            or self._navigation_fault is not None
+            or self._control_error() is not None
+            or self._command_start_ns is None
+        ):
+            return
+        stamp_ns = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
+        now_ns = self.get_clock().now().nanoseconds
+        # Commands queued before this goal was accepted never acquire its session.
+        if not self._command_start_ns < stamp_ns <= now_ns:
+            return
+        if now_ns - stamp_ns >= 500_000_000:
+            return
+        permission = self._make_permission(True)
+        self._permission_pub.publish(permission)
+        self._command_pub.publish(NavigationCommand(permission=permission, command=msg))
+
     def _check_navigation_safety(self):
+        self._ensure_registration()
+        now_ns = self.get_clock().now().nanoseconds
+        clock_reversed = (
+            self._last_ros_time_ns is not None
+            and now_ns < self._last_ros_time_ns
+        )
+        self._last_ros_time_ns = now_ns
         if (
             self._state in (
                 NavigationState.SENDING,
@@ -716,15 +879,19 @@ class NavigationManager(Node):
             )
             and self._navigation_fault is None
         ):
-            reason = self._readiness_error()
+            reason = self._control_error() or self._readiness_error()
+            if clock_reversed:
+                reason = 'ROS clock moved backwards; a new goal is required'
             if reason is not None:
                 self._fail_navigation(reason)
 
         allowed = (
             self._state == NavigationState.RUNNING
             and self._navigation_fault is None
+            and self._control_error() is None
         )
         self._navigation_pub.publish(Bool(data=allowed))
+        self._permission_pub.publish(self._make_permission(allowed))
 
     def _fail_navigation(self, reason: str):
         if self._navigation_fault is not None:
@@ -732,6 +899,7 @@ class NavigationManager(Node):
 
         self._navigation_fault = reason
         self._navigation_pub.publish(Bool(data=False))
+        self._permission_pub.publish(self._make_permission(False))
         self._publish_event(
             'safety_failure',
             reason=reason,
@@ -752,6 +920,7 @@ class NavigationManager(Node):
             self.cancel_goal()
         except Exception as exc:
             self._set_state(NavigationState.CANCELING)
+            self._cancel_deadline = time.monotonic() + 5.0
             self.get_logger().error(
                 f'Safety cancellation request failed: {exc}; '
                 'waiting for the goal result'

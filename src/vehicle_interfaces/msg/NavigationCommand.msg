@@ -1,0 +1,2 @@
+vehicle_interfaces/NavigationPermission permission
+geometry_msgs/TwistStamped command

@@ -2,35 +2,65 @@
 
 ## 명령 경로
 
-- 수동 입력: `/cmd_vel_manual`
-- 자율 입력: `/cmd_vel_auto`
-- 최종 출력: `/cmd_vel`
-- 메시지 타입: `geometry_msgs/msg/Twist`
+- 수동 입력 `/cmd_vel_manual`과 최종 출력 `/cmd_vel`: `geometry_msgs/msg/Twist`.
+- Nav2 입력 `/cmd_vel_auto`: `geometry_msgs/msg/TwistStamped`.
+  controller와 behavior server 모두 `enable_stamped_cmd_vel=true`로 실행한다.
+- manager → guard 입력 `/navigation_command`: `vehicle_interfaces/msg/NavigationCommand`.
+  목표 ID, guard/manager 세션, 전환 번호, heartbeat를 속도 명령과 함께 전달한다.
+- `/navigation_permission`: `vehicle_interfaces/msg/NavigationPermission`.
+- `/navigation_allowed`의 `Bool`은 관찰용이다. 이 토픽만 발행해서 주행을 허가할 수 없다.
 - 최종 출력 발행자는 `command_guard` 하나로 유지한다.
-- 시작 모드는 `manual`이다.
-- `/set_auto_mode` 서비스(`std_srvs/srv/SetBool`) 요청이 `true`이면
-  `auto`, `false`이면 `manual`을 선택한다.
-- 선택되지 않은 입력은 무시하고 명령 타임아웃을 갱신하지 않는다.
-- 수동·자율 입력 노드는 `/cmd_vel`에 직접 발행하지 않는다.
+- `system.launch.py`의 navigation 모드는 auto, manual/mapping 모드는 manual로 시작한다.
+- `/set_auto_mode`의 `true`는 auto, `false`는 manual을 선택한다.
 
 ```text
-수동 조종 → /cmd_vel_manual ─┐
-                            ├→ command_guard → /cmd_vel → 구동기
-자율주행 → /cmd_vel_auto ────┘
+수동 조종 → /cmd_vel_manual ────────────────────────────────┐
+                                                          ├→ command_guard → /cmd_vel → 구동기
+Nav2 → /cmd_vel_auto → navigation_manager → /navigation_command ┘
 ```
 
-## 모드 전환
+## 모드 전환과 새 목표
 
-- 전환 요청 시 기존 명령 수신 시각을 초기화하고 0 명령을 먼저 발행한다.
-- 그다음 선택 모드를 변경하며, 해당 모드의 입력을 다시 받기 전까지
-  타이머로 정지 명령을 반복 발행한다.
-- 모드 선택은 비상정지를 해제하지 않는다.
-- 같은 모드를 다시 선택해도 정지 명령을 발행한다.
-- 서비스 성공은 모드 선택과 정지 명령 발행 완료를 의미한다.
-- 현재 구현에는 실제 차량 정지 완료를 기다리는 interlock이 없다.
-  새 모드의 입력이 계속 발행 중이면 전환 처리 후 바로 전달될 수 있다.
-- `Twist`에는 발행 시각이 없어 전환 후 수신한 입력의 생성 시점은
-  구분하지 못한다.
+- 모든 모드 선택·비상정지 요청은 guard의 전환 번호를 증가시키고,
+  기존 허가·명령 시각을 즉시 무효화하며 0 명령을 발행한다.
+  같은 모드를 다시 선택하거나 비상정지를 해제하는 요청도 포함한다.
+- manager는 `/control_state`의 모드·비상정지·전환 번호를 확인하고,
+  실행/수락 대기 중인 목표가 있으면 허가를 차단하고 취소를 요청한다.
+  짧은 수동→자동 왕복으로 중간 상태를 놓쳐도 전환 번호 변경을 감지한다.
+- 자동 복귀나 비상정지 해제만으로 이전 목표를 재개하지 않는다.
+  별도 재개 기능은 제공하지 않으며 새 목표를 제출해야 한다.
+- 새 목표는 이전 액션 결과 수신과 `STOPPING` 이후 정지 확인이 끝나야 받는다.
+  auto·비상정지 해제·센서/TF 준비·최신 제어 상태가 필요하다.
+  최초 목표도 최신 연속 odom으로 1초 정지를 확인한 뒤 받는다.
+- 수동 입력은 manual 선택 후 새 입력으로 조작할 수 있다. 모드 선택은 비상정지를 해제하지 않는다.
+- 서비스 성공은 로컬 모드/비상정지 변경과 0 명령 발행 완료를 뜻한다.
+  Nav2 취소 완료나 실제 차량 정지 완료를 뜻하지 않는다.
+- 취소 거부·5초 타임아웃·결과 유실·정지 확인 실패에서는 차단을 유지한다.
+  이벤트와 로그에 이유를 남긴다. 불명확한 이전 목표의 운영 복구는
+  [이슈 004](../issues/004_navigation_fault_recovery.md)의 후속 범위이다.
+
+## 세션과 지연 메시지
+
+- guard가 UUID 세션과 전환 번호를 소유하며 0.1초마다 제어 상태 heartbeat를 발행한다.
+  manager는 `/register_navigation`으로 자신의 새 프로세스 세션을 등록한다.
+  초기 등록에는 주행 허가가 필요하지 않아 두 노드가 서로 기다리지 않는다.
+- 허가와 속도 명령은 현재 두 세션·전환 번호·목표 ID와 일치해야 한다.
+  허가는 증가하는 순서 번호로 역순 도착을 거부한다.
+- guard는 자신이 보낸 heartbeat를 기준으로 허가의 왕복 나이를 검사한다.
+  수신 시각만 갱신한 오래된 허가는 사용할 수 없다. 기본 유효 시간은 steady clock 0.5초이다.
+- 허가 단절 시 guard는 출력을 차단하고 전환 번호를 갱신한다.
+  manager도 제어 상태가 0.5초 끊기면 목표를 취소하고 차단을 유지한다.
+- manager는 새 목표 수락 이전에 생성된 Nav2 명령을 거부한다.
+  guard도 명령 생성 시각을 검사한다. 두 노드는 같은 ROS 시계를 사용해야 하며,
+  시뮬레이션 launch는 양쪽 모두 `use_sim_time=true`로 실행한다.
+  watchdog과 heartbeat 타이머는 시뮬레이션 일시정지와 무관한 steady clock을 쓴다.
+- guard 재시작은 세션을 바꾸므로 실행 중 manager가 목표를 취소한다.
+  manager만 재시작하면 새 등록으로 이전 허가를 폐기하고 `navigation_reset_required`를 설정한다.
+  새 manager는 이전 목표 종료를 증명할 수 없어 새 목표도 거부한다.
+  복구하려면 기존 Nav2를 종료하여 목표 실행을 끝내고 Nav2·guard·manager를 함께 재시작한다.
+  guard만 재시작해서 이 차단을 우회하면 안 된다.
+- Nav2 액션 서버는 이 manager가 목표를 관리한다. 외부에서 Nav2에 직접 목표를 보내거나
+  서버를 공유하는 운영 방식은 지원하지 않는다.
 
 ## 현재 command_guard 설정과 동작
 
@@ -87,9 +117,39 @@ watchdog 타임아웃을 확정한다.
 각 시험에서 마지막 유효 명령 수신부터 정지 처리 시작까지의 시간과
 실제 차량 정지까지의 시간을 별도로 측정한다.
 
-## 현재 검증 결과
+## 세션 연동 검증 결과 (2026-10-20)
 
-다음 결과는 사용자가 실행하고 확인한 결과이다.
+- 관련 패키지 빌드 완료. `vehicle_control` 65개, `vehicle_planning` 78개,
+  `vehicle_bringup` 3개, `vehicle_simulation` 일반 회귀 8개 통과: 총 154개.
+  외부 시스템이 필요한 2개 시험은 기본 실행에서는 건너뛴다.
+- 추가 Gazebo·Nav2 통합 시험 1개 통과. 수동 전환과 비상정지 활성화 후
+  각각 0.2초 만에 자동 복귀·정지 해제를 수행했다.
+
+| 전환 | 액션 종료와 정지 확인까지 | 이후 정지 관찰 | 0 출력 표본 | 실제 정지 표본 |
+|---|---:|---:|---:|---:|
+| auto → manual → auto | 1.096초 | 3초 | 90 | 150 |
+| 비상정지 활성화 → 해제 | 1.072초 | 3초 | 90 | 150 |
+
+두 경우 모두 `canceling → stopping → failed`로 종료했고 새 목표 전까지 정지를 유지했다.
+실제 정지는 `/ground_truth/odom`의 선속도 0.02 m/s 이하·각속도 0.05 rad/s 이하로 별도 판정했다.
+이후 새 목표에서 움직임, 정상 취소, 정상 목표 성공까지 확인했다.
+
+재현은 새 evaluation navigation 시스템을 실행한 뒤 같은 ROS 도메인에서 수행한다.
+테스트 종료 시 비상정지를 활성화한다.
+
+```bash
+source env.sh
+RUN_SAFETY_SYNC_INTEGRATION=1 python -m pytest src/vehicle_simulation/test/test_safety_navigation_sync.py -q -s
+```
+
+노드 재시작·늦은 수락·취소 거부·heartbeat 단절·지연 메시지는
+`test_navigation_control_sync.py`의 ROS 노드 통합 시험에서 검증했다.
+이 경계 조건의 Gazebo 강제 장애 주입 및 실차 물리 시험은 별도이다.
+
+## 이전 구현 검증 기록
+
+다음은 세션 연동 이전 구현에 대해 사용자가 실행하고 확인한 기록이다.
+현재 자동 입력의 메시지 타입과 재출발 정책은 위 계약을 따른다.
 
 - `vehicle_control` 단위·통합 테스트: 48개 통과
 - 수동·자율 명령 동시 발행 시 선택된 모드의 명령만 출력

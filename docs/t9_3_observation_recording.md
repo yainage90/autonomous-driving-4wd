@@ -112,7 +112,8 @@ ros2 service call /navigation_manager/set_goal \
 
 결과와 실제 정지를 확인하고 A를 Ctrl+C로 종료한 뒤 B의 시스템을 종료한다.
 기록 대상은 `/clock`, `/scan`, `/odom`, `/ground_truth/odom`, `/tf`, `/tf_static`,
-`/cmd_vel_manual`, `/cmd_vel_auto`, `/cmd_vel`, `/navigation_allowed`,
+`/cmd_vel_manual`, `/cmd_vel_auto`(TwistStamped), `/cmd_vel`, `/navigation_allowed`,
+`/control_state`, `/navigation_permission`, `/navigation_command`,
 `/navigation_manager/events`, `/rosout`이다.
 
 ```bash

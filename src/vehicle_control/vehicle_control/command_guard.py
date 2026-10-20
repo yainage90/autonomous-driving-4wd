@@ -1,4 +1,5 @@
 import math
+from uuid import uuid4
 import rclpy
 from rclpy.node import Node
 from rclpy.clock import Clock
@@ -6,7 +7,12 @@ from rclpy.clock_type import ClockType
 
 from geometry_msgs.msg import Twist
 from std_srvs.srv import SetBool
-from std_msgs.msg import Bool
+from vehicle_interfaces.msg import (
+    ControlState,
+    NavigationCommand,
+    NavigationPermission,
+)
+from vehicle_interfaces.srv import RegisterNavigation
 
 
 class CommandGuard(Node):
@@ -33,8 +39,8 @@ class CommandGuard(Node):
         )
 
         self.cmd_sub_auto = self.create_subscription(
-            Twist,
-            'cmd_vel_auto',
+            NavigationCommand,
+            'navigation_command',
             self.on_command_auto,
             10
         )
@@ -81,14 +87,89 @@ class CommandGuard(Node):
         ):
             raise ValueError('navigation_timeout_sec must be finite and positive')
 
-        self._navigation_allowed = False
-        self._navigation_received_at = None
-
+        self._guard_session = uuid4().hex
+        self._manager_session = ''
+        self._manager_received_at = None
+        self._navigation_reset_required = False
+        self._epoch = 0
+        self._heartbeat = 0
+        self._heartbeat_times = {}
+        self._permission = None
+        self._permission_sequence = 0
+        self._control_pub = self.create_publisher(ControlState, 'control_state', 1)
+        self._register_service = self.create_service(
+            RegisterNavigation, 'register_navigation', self.on_register_navigation,
+        )
         self.navigation_allowed_subscription = self.create_subscription(
-            Bool,
-            'navigation_allowed',
-            self.on_navigation_allowed,
-            1,
+            NavigationPermission, 'navigation_permission',
+            self.on_navigation_allowed, 1,
+        )
+        self._control_timer = self.create_timer(
+            0.1, self.publish_control_state, clock=self.safety_clock,
+        )
+        self.publish_control_state()
+
+    def publish_control_state(self):
+        now = self.safety_clock.now().nanoseconds
+        self._heartbeat += 1
+        self._heartbeat_times[self._heartbeat] = now
+        cutoff = now - int(self.navigation_timeout_sec * 1e9)
+        self._heartbeat_times = {
+            key: value for key, value in self._heartbeat_times.items()
+            if value > cutoff
+        }
+        self._control_pub.publish(ControlState(
+            guard_session=self._guard_session,
+            manager_session=self._manager_session,
+            epoch=self._epoch, heartbeat=self._heartbeat,
+            auto_mode=self.control_mode == 'auto',
+            emergency_stop=self.emergency_stop_active,
+            navigation_reset_required=self._navigation_reset_required,
+        ))
+
+    def _invalidate_navigation(self):
+        # Revoke locally before notifying the manager or waiting for cancellation.
+        self._epoch += 1
+        self._permission = None
+        self._permission_sequence = 0
+        self._heartbeat_times.clear()
+        self.last_command_time = None
+        self.cmd_pub.publish(Twist())
+        self.publish_control_state()
+
+    def on_register_navigation(self, request, response):
+        response.success = bool(request.manager_session)
+        if response.success and request.manager_session != self._manager_session:
+            now = self.safety_clock.now().nanoseconds
+            if (
+                self._manager_received_at is not None
+                and now - self._manager_received_at < self.navigation_timeout_sec * 1e9
+            ):
+                response.success = False
+                return response
+            # The new process has no handle for a possibly live predecessor goal.
+            # Keep admission blocked until Nav2 and guard are restarted together.
+            self._navigation_reset_required = bool(self._manager_session)
+            self._manager_session = request.manager_session
+            self._manager_received_at = None
+            self._invalidate_navigation()
+        return response
+
+    def _permission_matches(self, permission):
+        sent_at = self._heartbeat_times.get(permission.heartbeat)
+        return (
+            self.control_mode == 'auto'
+            and not self.emergency_stop_active
+            and not self._navigation_reset_required
+            and bool(self._manager_session)
+            and permission.guard_session == self._guard_session
+            and permission.manager_session == self._manager_session
+            and permission.epoch == self._epoch
+            and permission.allowed
+            and bool(permission.goal_id)
+            and sent_at is not None
+            and 0 <= self.safety_clock.now().nanoseconds - sent_at
+            < self.navigation_timeout_sec * 1e9
         )
 
     def on_command_manual(self, msg):
@@ -105,8 +186,21 @@ class CommandGuard(Node):
             self.cmd_pub.publish(Twist())
             return
         
-        self.on_command(msg)
-
+        if (
+            not self._permission_matches(msg.permission)
+            or msg.permission.goal_id != self._permission.goal_id
+        ):
+            self.last_command_time = None
+            self.cmd_pub.publish(Twist())
+            return
+        stamp = msg.command.header.stamp
+        stamp_ns = stamp.sec * 10**9 + stamp.nanosec
+        age = self.get_clock().now().nanoseconds - stamp_ns
+        if not 0 <= age < self.command_timeout_sec * 1e9:
+            self.last_command_time = None
+            self.cmd_pub.publish(Twist())
+            return
+        self.on_command(msg.command.twist)
 
     def on_command(self, msg):
         if self.emergency_stop_active:
@@ -152,8 +246,7 @@ class CommandGuard(Node):
     def on_emergency_stop(self, request, response):
         self.emergency_stop_active = request.data
 
-        self.last_command_time = None
-        self.cmd_pub.publish(Twist())
+        self._invalidate_navigation()
 
         response.success = True
 
@@ -161,7 +254,7 @@ class CommandGuard(Node):
             response.message = '비상정지를 활성화했습니다'
             self.get_logger().warning(response.message)
         else:
-            response.message = '비상정지를 해제했습니다. 새 속도 명령을 기다립니다'
+            response.message = '비상정지를 해제했습니다. 자율주행은 새 목표가 필요합니다'
             self.get_logger().info(response.message)
         
         return response
@@ -169,14 +262,12 @@ class CommandGuard(Node):
     def on_auto_mode(self, request, response):
         next_mode = 'auto' if request.data else 'manual'
 
-        self.last_command_time = None
-        self.cmd_pub.publish(Twist())
-
         self.control_mode = next_mode
+        self._invalidate_navigation()
 
         response.success = True
         response.message = (
-            f'{next_mode} 모드를 선택했습니다. 정지하고 새 입력을 기다립니다.'
+            f'{next_mode} 모드를 선택했습니다. 자율주행은 새 목표가 필요합니다.'
         )
         self.get_logger().info(response.message)
 
@@ -192,6 +283,9 @@ class CommandGuard(Node):
             self.control_mode == 'auto'
             and not self._navigation_is_allowed()
         ):
+            if self._permission is not None:
+                self._invalidate_navigation()
+                return
             self.last_command_time = None
             self.cmd_pub.publish(Twist())
             return
@@ -207,25 +301,26 @@ class CommandGuard(Node):
             self.get_logger().warning('속도 명령 타임아웃으로 정지합니다')
     
     def on_navigation_allowed(self, msg):
-        self._navigation_allowed = msg.data
-        self._navigation_received_at = self.safety_clock.now()
-
-        if self.control_mode == 'auto' and not msg.data:
+        if (
+            msg.guard_session != self._guard_session
+            or msg.manager_session != self._manager_session
+            or msg.epoch != self._epoch
+            or msg.sequence <= self._permission_sequence
+            or msg.heartbeat not in self._heartbeat_times
+        ):
+            return
+        self._permission_sequence = msg.sequence
+        self._manager_received_at = self.safety_clock.now().nanoseconds
+        self._permission = msg if self._permission_matches(msg) else None
+        if self._permission is None and self.control_mode == 'auto':
             self.last_command_time = None
             self.cmd_pub.publish(Twist())
 
     def _navigation_is_allowed(self) -> bool:
-        if (
-            not self._navigation_allowed
-            or self._navigation_received_at is None
-        ):
-            return False
-
-        elapsed = (
-            self.safety_clock.now() - self._navigation_received_at
-        ).nanoseconds / 1_000_000_000
-
-        return 0.0 <= elapsed < self.navigation_timeout_sec
+        return (
+            self._permission is not None
+            and self._permission_matches(self._permission)
+        )
 
 
 def main(args=None):
