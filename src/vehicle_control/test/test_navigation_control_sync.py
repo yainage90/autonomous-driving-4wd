@@ -31,7 +31,7 @@ def wait(executor, predicate, timeout=3.0):
 
 
 @pytest.fixture
-def system(monkeypatch):
+def system(monkeypatch, selection_actuator):
     rclpy.init(args=['--ros-args', '-r', f'__ns:=/sync_{uuid.uuid4().hex}',
                      '-p', 'initial_mode:=auto'])
     executor = SingleThreadedExecutor()
@@ -75,6 +75,7 @@ def system(monkeypatch):
 
 def submit(system, accept=True):
     future = system.manager.send_goal(1.0, 0.0, 0.0)
+    assert wait(system.executor, lambda: not system.manager._preparing_goal)
     handle = Mock()
     handle.accepted = True
     handle.cancel_goal_async.return_value = Future()

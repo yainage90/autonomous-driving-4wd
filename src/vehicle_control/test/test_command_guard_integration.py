@@ -63,7 +63,7 @@ def request_auto_mode(client, executor, enabled):
 
 
 @pytest.fixture
-def ros_system():
+def ros_system(selection_actuator):
     # 다른 실행 중인 노드와 토픽·서비스 이름이 겹치지 않도록 분리
     namespace = f'/test_guard_{uuid.uuid4().hex}'
     rclpy.init(args=[

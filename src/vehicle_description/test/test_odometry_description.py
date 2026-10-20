@@ -60,7 +60,7 @@ def test_effective_wheel_separation_preserves_geometry(robot, vehicle_config):
         )
 
     diff_drive = robot.find(
-        "./gazebo/plugin[@name='gz::sim::systems::DiffDrive']"
+        "./gazebo/plugin[@name='vehicle::WatchdogDiffDrive']"
     )
     assert diff_drive is not None, 'DiffDrive 플러그인이 없습니다.'
 
@@ -77,7 +77,7 @@ def test_effective_wheel_separation_preserves_geometry(robot, vehicle_config):
 def test_diff_drive_odometry_contract(robot):
     """오도메트리와 TF가 프로젝트의 토픽·frame 규약을 유지해야 한다."""
     plugins = robot.findall(
-        "./gazebo/plugin[@name='gz::sim::systems::DiffDrive']"
+        "./gazebo/plugin[@name='vehicle::WatchdogDiffDrive']"
     )
     assert len(plugins) == 1, (
         'DiffDrive 플러그인은 하나여야 합니다.'
@@ -85,7 +85,6 @@ def test_diff_drive_odometry_contract(robot):
     diff_drive = plugins[0]
 
     expected_fields = {
-        'topic': '/cmd_vel',
         'odom_topic': '/odom',
         'tf_topic': '/tf',
         'frame_id': 'odom',

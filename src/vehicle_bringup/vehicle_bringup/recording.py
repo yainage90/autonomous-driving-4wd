@@ -66,6 +66,8 @@ TOPICS = [
     '/cmd_vel_manual',
     '/cmd_vel_auto',
     '/cmd_vel',
+    '/actuator/command',
+    '/actuator/status',
     '/navigation_allowed',
     '/control_state',
     '/navigation_permission',

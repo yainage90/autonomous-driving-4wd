@@ -2,7 +2,9 @@
 
 ## 명령 경로
 
-- 수동 입력 `/cmd_vel_manual`과 최종 출력 `/cmd_vel`: `geometry_msgs/msg/Twist`.
+- 수동 입력 `/cmd_vel_manual`과 관측 출력 `/cmd_vel`: `geometry_msgs/msg/Twist`.
+- 실제 구동 출력은 `/actuator/command`: `vehicle_interfaces/msg/ActuatorCommand`.
+  Gazebo watchdog 플러그인이 직접 수신하며 `/cmd_vel` 브리지는 사용하지 않는다.
 - Nav2 입력 `/cmd_vel_auto`: `geometry_msgs/msg/TwistStamped`.
   controller와 behavior server 모두 `enable_stamped_cmd_vel=true`로 실행한다.
 - manager → guard 입력 `/navigation_command`: `vehicle_interfaces/msg/NavigationCommand`.
@@ -15,7 +17,7 @@
 
 ```text
 수동 조종 → /cmd_vel_manual ────────────────────────────────┐
-                                                          ├→ command_guard → /cmd_vel → 구동기
+                                                          ├→ command_guard → /actuator/command → 구동기
 Nav2 → /cmd_vel_auto → navigation_manager → /navigation_command ┘
 ```
 
@@ -32,9 +34,12 @@ Nav2 → /cmd_vel_auto → navigation_manager → /navigation_command ┘
 - 새 목표는 이전 액션 결과 수신과 `STOPPING` 이후 정지 확인이 끝나야 받는다.
   auto·비상정지 해제·센서/TF 준비·최신 제어 상태가 필요하다.
   최초 목표도 최신 연속 odom으로 1초 정지를 확인한 뒤 받는다.
-- 수동 입력은 manual 선택 후 새 입력으로 조작할 수 있다. 모드 선택은 비상정지를 해제하지 않는다.
-- 서비스 성공은 로컬 모드/비상정지 변경과 0 명령 발행 완료를 뜻한다.
-  Nav2 취소 완료나 실제 차량 정지 완료를 뜻하지 않는다.
+- 수동 입력은 명시적 manual 선택과 구동기 활성화 성공 이후 새 입력으로 조작한다.
+  초기 launch 모드 선택은 활성화가 아니다. 모드 선택은 비상정지를 해제하지 않는다.
+- 비상정지 서비스 성공은 로컬 상태 변경과 0 명령 발행을 뜻한다.
+  수동 모드 서비스는 구동기 정지 확인·활성화 응답까지 받아야 성공한다.
+  auto 선택은 모드만 선택하며 새 목표의 준비 절차에서 구동기를 활성화한다.
+  Nav2 취소 완료는 별도로 확인한다.
 - 취소 거부·5초 타임아웃·결과 유실·정지 확인 실패에서는 차단을 유지한다.
   이벤트와 로그에 이유를 남긴다. 불명확한 이전 목표의 운영 복구는
   [이슈 004](../issues/004_navigation_fault_recovery.md)의 후속 범위이다.
@@ -69,23 +74,28 @@ Nav2 → /cmd_vel_auto → navigation_manager → /navigation_command ┘
 - 최대 선속도: 0.2 m/s
 - 최대 각속도: 0.6 rad/s
 - 명령 타임아웃 측정과 검사 타이머는 steady clock을 사용한다.
-- 주행 중에는 수신한 명령을 처리해 출력하며 별도 주행 heartbeat는 없다.
-- 명령이 없거나 비상정지 상태이면 타이머로 0 명령을 반복 발행한다.
-- `command_guard`가 종료되면 이 노드의 타임아웃 처리와 정지 명령
-  발행도 중단된다. 실차 구동기는 독립적인 watchdog이 필요하다.
+- 주행 중에는 유효한 입력을 저장하고 steady clock 20 Hz로 구동 명령을 반복한다.
+  매 출력에서 원래 입력 freshness·자동 허가·비상정지·구동기 상태를 다시 검사한다.
+- 구동기 상태와 heartbeat가 0.2초 만료되거나 구동기가 차단되면 guard는
+  입력과 자동 허가를 폐기하고 전환 번호를 갱신한다.
+- guard가 멈추면 Gazebo 플러그인의 독립 watchdog이 마지막 유효 명령 후
+  0.3초 만료를 판단하고 첫 물리 업데이트에서 바퀴 출력을 0으로 바꾼다.
+- 시작·watchdog·pause·재시작 뒤에는 수동 재선택 또는 새 자동 목표가 필요하다.
+  비상정지 해제나 통신 복구만으로 활성화하지 않는다.
+- 전체 프로토콜·설정·검증 및 실차 후속 범위는
+  [구동기 watchdog 문서](actuator_watchdog.md)를 따른다.
 
 ## 실차 모터 제어기 watchdog 요구사항
 
 다음 수치는 초기 제안값이며 하드웨어와 통신 지연 측정 후 확정한다.
-현재 ROS 설정에 적용된 값은 아니다.
+아래 실차 값은 아직 확정되지 않았다. 시뮬레이션에는 20 Hz·0.3초를 적용했다.
 
 | 항목 | 초기 제안 |
 |---|---|
 | 정상 주행 명령 송신 주기 | 10 Hz 이상 |
 | 모터 제어기 watchdog 타임아웃 | 0.3초 |
 
-주행 출력이 입력 주기를 따르는 현재 구조에서는 입력 송신 주기도
-함께 보장해야 한다. 정상 명령의 최대 수신 간격과 통신 지연을 측정해
+현재 guard는 20 Hz로 출력하지만 입력 freshness는 원래 수신 시각으로 유지한다. 정상 명령의 최대 수신 간격과 통신 지연을 측정해
 watchdog 타임아웃을 확정한다.
 
 - watchdog은 ROS 노드나 PC의 정상 동작에 의존하지 않고 모터 제어기에서
@@ -97,7 +107,7 @@ watchdog 타임아웃을 확정한다.
 - 제어기 시작 시 모터 출력은 정지 상태로 유지한다.
 - watchdog 정지 후에는 통신 복구만으로 자동 재출발하지 않는다.
 - 명시적 재활성화와 그 이후의 새 유효 명령이 있어야 주행을 허용한다.
-  재활성화 절차와 인터페이스는 실차 구동기 구현 시 정의한다.
+  재활성화 상태 전이는 시뮬레이션 계약을 따르며 실제 통신 형식은 실차 단계에서 정의한다.
 - 제어기 비상정지는 명령 수신이나 모드 선택으로 해제되지 않는다.
 - 정지 시 브레이크 또는 출력 차단 방식은 모터 제어기 사양에 맞게
   확정한다.
@@ -159,4 +169,5 @@ RUN_SAFETY_SYNC_INTEGRATION=1 python -m pytest src/vehicle_simulation/test/test_
 - Gazebo에서 수동 → 자율 전환 시 0 출력 유지 및 차량 정지 확인
 - Gazebo에서 자율 → 수동 전환 시 0 출력 유지 및 차량 정지 확인
 
-실차 watchdog은 요구사항 정의 단계이며 구현과 실차 검증은 후속 작업이다.
+Gazebo 구동기 watchdog은 구현·장애 주입 검증을 마쳤다.
+실차 watchdog은 요구사항 단계이며 드라이버·펌웨어 구현과 물리 검증은 후속 작업이다.

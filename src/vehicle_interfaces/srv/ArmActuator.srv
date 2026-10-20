@@ -1,0 +1,13 @@
+uint8 DISARM=0
+uint8 ARM=1
+uint8 ESTOP=2
+uint8 CLEAR_ESTOP=3
+string actuator_session
+uint64 generation
+string guard_session
+uint64 heartbeat
+uint8 operation
+---
+bool success
+string message
+uint64 generation

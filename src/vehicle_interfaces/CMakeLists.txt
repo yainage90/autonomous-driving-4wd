@@ -9,10 +9,14 @@ find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/VehicleStatus.msg"
   "msg/ControlState.msg"
+  "msg/ActuatorCommand.msg"
+  "msg/ActuatorStatus.msg"
   "msg/NavigationPermission.msg"
   "msg/NavigationCommand.msg"
   "srv/RegisterNavigation.srv"
   "srv/SetNavigationGoal.srv"
+  "srv/ArmActuator.srv"
+  "srv/PrepareActuator.srv"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

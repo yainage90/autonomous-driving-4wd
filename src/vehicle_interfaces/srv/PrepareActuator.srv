@@ -1,0 +1,7 @@
+string guard_session
+string manager_session
+uint64 epoch
+string goal_id
+---
+bool success
+string message

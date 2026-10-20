@@ -14,6 +14,7 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>vehicle_simulation</exec_depend>
+  <exec_depend>vehicle_actuator_sim</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <test_depend>python3-pytest</test_depend>
