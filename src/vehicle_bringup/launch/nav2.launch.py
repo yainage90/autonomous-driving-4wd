@@ -58,7 +58,7 @@ def generate_launch_description():
         parameters=[
             LaunchConfiguration('nav2_params_file'),
             LaunchConfiguration('controller_params_file'),
-            {'enable_stamped_cmd_vel': False},
+            {'enable_stamped_cmd_vel': True},
         ],
         remappings=[('cmd_vel', 'cmd_vel_auto')],
         output='screen',
@@ -70,7 +70,7 @@ def generate_launch_description():
         name='behavior_server',
         parameters=[
             LaunchConfiguration('nav2_params_file'),
-            {'enable_stamped_cmd_vel': False},
+            {'enable_stamped_cmd_vel': True},
         ],
         remappings=[('cmd_vel', 'cmd_vel_auto')],
         output='screen',

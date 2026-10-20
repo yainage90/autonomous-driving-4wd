@@ -23,7 +23,7 @@ def generate_launch_description():
         parameters=[
             str(costmap_params),
             str(controller_params),
-            {'enable_stamped_cmd_vel': False},
+            {'enable_stamped_cmd_vel': True},
         ],
         remappings=[
             ('cmd_vel', 'cmd_vel_auto'),

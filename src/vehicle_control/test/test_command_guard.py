@@ -2,12 +2,39 @@ from unittest.mock import patch
 
 import pytest
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistStamped
+from vehicle_interfaces.msg import NavigationPermission, NavigationCommand
+from vehicle_interfaces.srv import RegisterNavigation
 from std_srvs.srv import SetBool
-from std_msgs.msg import Bool
+from std_msgs.msg import Header
 from rclpy.time import Time
 
 from vehicle_control.command_guard import CommandGuard
+
+
+def permit(node, allowed=True):
+    if not node._manager_session:
+        node.on_register_navigation(
+            RegisterNavigation.Request(manager_session='test_manager'),
+            RegisterNavigation.Response(),
+        )
+    node.publish_control_state()
+    message = NavigationPermission(
+        guard_session=node._guard_session, manager_session=node._manager_session,
+        epoch=node._epoch, heartbeat=node._heartbeat,
+        sequence=node._permission_sequence + 1, goal_id='test_goal', allowed=allowed,
+    )
+    node.on_navigation_allowed(message)
+    return message
+
+
+def auto_command(node, command):
+    return NavigationCommand(
+        permission=node._permission or NavigationPermission(),
+        command=TwistStamped(twist=command, header=Header(
+            stamp=node.get_clock().now().to_msg(),
+        )),
+    )
 
 
 @pytest.fixture
@@ -412,7 +439,7 @@ def test_mode_switch_stops_and_waits_for_selected_input(
     guard, auto_enabled,
 ):
     node, publish_mock = guard
-    node.on_navigation_allowed(Bool(data=True))
+    permit(node)
 
     # 전환 전·후의 입력 콜백 선택
     if auto_enabled:
@@ -426,10 +453,13 @@ def test_mode_switch_stops_and_waits_for_selected_input(
         new_command_callback = node.on_command_manual
         expected_mode = 'manual'
 
+    permit(node)
+    publish_mock.reset_mock()
+
     # 준비: 전환 전 모드로 주행
     old_command = Twist()
     old_command.linear.x = 0.1
-    old_command_callback(old_command)
+    old_command_callback(auto_command(node, old_command) if not auto_enabled else old_command)
 
     assert node.last_command_time is not None
     publish_mock.reset_mock()
@@ -453,7 +483,7 @@ def test_mode_switch_stops_and_waits_for_selected_input(
     publish_mock.reset_mock()
 
     # 이전 모드의 입력은 무시
-    old_command_callback(old_command)
+    old_command_callback(auto_command(node, old_command) if not auto_enabled else old_command)
 
     publish_mock.assert_not_called()
     assert node.last_command_time is None
@@ -461,7 +491,10 @@ def test_mode_switch_stops_and_waits_for_selected_input(
     # 새 모드의 입력은 전달
     new_command = Twist()
     new_command.linear.x = -0.1
-    new_command_callback(new_command)
+    if auto_enabled:
+        permit(node)
+        publish_mock.reset_mock()
+    new_command_callback(auto_command(node, new_command) if auto_enabled else new_command)
 
     publish_mock.assert_called_once()
     assert publish_mock.call_args.args[0].linear.x == pytest.approx(-0.1)
@@ -471,7 +504,7 @@ def test_mode_switch_stops_and_waits_for_selected_input(
 @pytest.mark.parametrize('auto_enabled', [True, False])
 def test_mode_request_preserves_emergency_stop(guard, auto_enabled):
     node, publish_mock = guard
-    node.on_navigation_allowed(Bool(data=True))
+    permit(node)
 
     # 준비: 비상정지 활성화
     stop_request = SetBool.Request()
@@ -528,7 +561,7 @@ def test_auto_blocks_without_fresh_permission(
         now_mock.return_value = start
 
         if permission is not None:
-            node.on_navigation_allowed(Bool(data=permission))
+            permit(node, permission)
 
         publish_mock.reset_mock()
         now_mock.return_value = checked_at

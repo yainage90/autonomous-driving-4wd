@@ -31,7 +31,7 @@ def generate_launch_description():
         executable='command_guard',
         parameters=[
             LaunchConfiguration('safety_params_file'),
-            {'initial_mode': initial_mode},
+            {'initial_mode': initial_mode, 'use_sim_time': True},
         ],
         output='screen',
     )
