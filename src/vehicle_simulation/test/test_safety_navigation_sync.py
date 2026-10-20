@@ -11,6 +11,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 from vehicle_interfaces.srv import SetNavigationGoal
+from vehicle_interfaces.msg import ActuatorStatus, ControlState
 
 
 @pytest.mark.skipif(
@@ -24,6 +25,9 @@ def test_mode_and_emergency_transitions_require_new_goal(tmp_path):
         parameter_overrides=[Parameter('use_sim_time', value=True)],
     )
     events, commands, raw, truth = [], [], [], []
+    control, actuator = [], []
+    node.create_subscription(ControlState, '/control_state', control.append, 1)
+    node.create_subscription(ActuatorStatus, '/actuator/status', actuator.append, 1)
     node.create_subscription(
         String, '/navigation_manager/events',
         lambda msg: events.append(json.loads(msg.data)), 100,
@@ -83,7 +87,9 @@ def test_mode_and_emergency_transitions_require_new_goal(tmp_path):
 
     report = []
     try:
-        wait(lambda: len(truth) >= 20, 25)
+        wait(lambda: len(truth) >= 20 and control and control[-1].manager_session
+             and actuator and actuator[-1].stationary
+             and all(client.service_is_ready() for client in (goal, mode, stop, cancel)), 25)
         call(mode, SetBool.Request(data=True))
         call(stop, SetBool.Request(data=False))
         observe(2)

@@ -1,4 +1,5 @@
 import math
+import copy
 from uuid import uuid4
 import rclpy
 from rclpy.node import Node
@@ -12,7 +13,9 @@ from vehicle_interfaces.msg import (
     NavigationCommand,
     NavigationPermission,
 )
-from vehicle_interfaces.srv import RegisterNavigation
+from vehicle_interfaces.srv import RegisterNavigation, PrepareActuator, ArmActuator
+from rclpy.callback_groups import ReentrantCallbackGroup
+from vehicle_control.actuator_link import ActuatorLink
 
 
 class CommandGuard(Node):
@@ -59,9 +62,11 @@ class CommandGuard(Node):
         ):
             raise ValueError('command_timeout_sec는 유한한 양수여야 합니다')
 
+        for value in (self.max_linear_speed_mps, self.max_angular_speed_rps):
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError('Speed limits must be finite and positive')
         self.last_command_time = None
         self.safety_clock = Clock(clock_type=ClockType.STEADY_TIME)
-        self.timer = self.create_timer(0.05, self.check_timeout, clock=self.safety_clock)
 
         self.emergency_stop_active = False
         self.emergency_stop_service = self.create_service(
@@ -73,7 +78,8 @@ class CommandGuard(Node):
         self.auto_mode_service = self.create_service(
             SetBool,
             'set_auto_mode',
-            self.on_auto_mode,
+            self._on_auto_mode_service,
+            callback_group=ReentrantCallbackGroup(),
         )
 
         self.declare_parameter('navigation_timeout_sec', 0.5)
@@ -107,7 +113,80 @@ class CommandGuard(Node):
         self._control_timer = self.create_timer(
             0.1, self.publish_control_state, clock=self.safety_clock,
         )
+        self._cached_command = Twist()
+        self._cached_auto_stamp_ns = None
+        self._armed_ros_ns = 0
+        self._prepared_goals = set()
+        self.actuator = ActuatorLink(self, self._actuator_fault)
+        self._output_timer = self.create_timer(
+            self.actuator.period, self.publish_output, clock=self.safety_clock,
+        )
+        self._prepare_service = self.create_service(
+            PrepareActuator, 'prepare_actuator', self.on_prepare_actuator,
+            callback_group=ReentrantCallbackGroup(),
+        )
         self.publish_control_state()
+
+    def _actuator_fault(self):
+        self._invalidate_navigation(disarm=False)
+        self.get_logger().warning('Actuator unavailable or disarmed; explicit activation required')
+
+    async def _on_auto_mode_service(self, request, response):
+        self.on_auto_mode(request, response)
+        if not request.data:
+            try:
+                await self.actuator.arm(self._epoch)
+            except Exception as exc:
+                response.success = False
+                response.message = str(exc)
+        return response
+
+    async def on_prepare_actuator(self, request, response):
+        epoch = self._epoch
+        if not (
+            self.control_mode == 'auto' and not self.emergency_stop_active
+            and not self._navigation_reset_required and request.goal_id
+            and request.guard_session == self._guard_session
+            and request.manager_session == self._manager_session
+            and request.epoch == epoch and request.goal_id not in self._prepared_goals
+        ):
+            response.message = 'New goal and current control sessions are required'
+            return response
+        self._prepared_goals.add(request.goal_id)
+        self.last_command_time = None
+        self._cached_command = Twist()
+        self.actuator.block()
+        try:
+            await self.actuator.arm(epoch)
+            response.success = True
+            response.message = 'Actuator armed; a new accepted goal command is required'
+        except Exception as exc:
+            response.message = str(exc)
+        return response
+
+    def publish_output(self):
+        self._stop_published = False
+        self.actuator.check()
+        self.check_timeout()
+        if self._stop_published:
+            return
+        command = Twist()
+        if self.actuator.ready() and self.last_command_time is not None:
+            if self.control_mode == 'manual' or (
+                self._navigation_is_allowed()
+                and self._cached_auto_stamp_ns is not None
+                and 0 <= self.get_clock().now().nanoseconds - self._cached_auto_stamp_ns
+                < self.command_timeout_sec * 1e9
+            ):
+                command = self._cached_command
+        self.actuator.send(command)
+        self.cmd_pub.publish(copy.deepcopy(command))
+
+    def _publish_stop(self):
+        self._stop_published = True
+        self._cached_command = Twist()
+        self.actuator.send(Twist())
+        self.cmd_pub.publish(Twist())
 
     def publish_control_state(self):
         now = self.safety_clock.now().nanoseconds
@@ -127,14 +206,18 @@ class CommandGuard(Node):
             navigation_reset_required=self._navigation_reset_required,
         ))
 
-    def _invalidate_navigation(self):
+    def _invalidate_navigation(self, disarm=True):
         # Revoke locally before notifying the manager or waiting for cancellation.
+        if disarm:
+            self.actuator.block()
+        self._cached_command = Twist()
+        self._cached_auto_stamp_ns = None
         self._epoch += 1
         self._permission = None
         self._permission_sequence = 0
         self._heartbeat_times.clear()
         self.last_command_time = None
-        self.cmd_pub.publish(Twist())
+        self._publish_stop()
         self.publish_control_state()
 
     def on_register_navigation(self, request, response):
@@ -183,7 +266,7 @@ class CommandGuard(Node):
 
         if not self._navigation_is_allowed():
             self.last_command_time = None
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             return
         
         if (
@@ -191,20 +274,21 @@ class CommandGuard(Node):
             or msg.permission.goal_id != self._permission.goal_id
         ):
             self.last_command_time = None
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             return
         stamp = msg.command.header.stamp
         stamp_ns = stamp.sec * 10**9 + stamp.nanosec
         age = self.get_clock().now().nanoseconds - stamp_ns
-        if not 0 <= age < self.command_timeout_sec * 1e9:
+        if not (self._armed_ros_ns < stamp_ns and 0 <= age < self.command_timeout_sec * 1e9):
             self.last_command_time = None
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             return
+        self._cached_auto_stamp_ns = stamp_ns
         self.on_command(msg.command.twist)
 
     def on_command(self, msg):
-        if self.emergency_stop_active:
-            self.cmd_pub.publish(Twist())
+        if self.emergency_stop_active or not self.actuator.ready():
+            self._publish_stop()
             return
 
         values = (
@@ -218,7 +302,7 @@ class CommandGuard(Node):
 
         if not all(math.isfinite(value) for value in values):
             self.last_command_time = None
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             self.get_logger().warning('비정상 속도 명령을 거부하고 정지합니다')
             return
 
@@ -241,12 +325,15 @@ class CommandGuard(Node):
         msg.angular.x = 0.0
         msg.angular.y = 0.0
 
+        self._cached_command = copy.deepcopy(msg)
         self.cmd_pub.publish(msg)
 
     def on_emergency_stop(self, request, response):
         self.emergency_stop_active = request.data
 
-        self._invalidate_navigation()
+        self._invalidate_navigation(disarm=False)
+        self.actuator.block(ArmActuator.Request.ESTOP if request.data
+                            else ArmActuator.Request.CLEAR_ESTOP)
 
         response.success = True
 
@@ -254,7 +341,7 @@ class CommandGuard(Node):
             response.message = '비상정지를 활성화했습니다'
             self.get_logger().warning(response.message)
         else:
-            response.message = '비상정지를 해제했습니다. 자율주행은 새 목표가 필요합니다'
+            response.message = '비상정지를 해제했습니다. 수동 재선택 또는 새 목표가 필요합니다'
             self.get_logger().info(response.message)
         
         return response
@@ -276,7 +363,7 @@ class CommandGuard(Node):
 
     def check_timeout(self):
         if self.emergency_stop_active:
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             return
 
         if (
@@ -287,17 +374,17 @@ class CommandGuard(Node):
                 self._invalidate_navigation()
                 return
             self.last_command_time = None
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             return
 
         if self.last_command_time is None:
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             return
 
         elapsed = (self.safety_clock.now() - self.last_command_time).nanoseconds / 1_000_000_000
         if elapsed >= self.command_timeout_sec:
             self.last_command_time = None
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
             self.get_logger().warning('속도 명령 타임아웃으로 정지합니다')
     
     def on_navigation_allowed(self, msg):
@@ -314,7 +401,7 @@ class CommandGuard(Node):
         self._permission = msg if self._permission_matches(msg) else None
         if self._permission is None and self.control_mode == 'auto':
             self.last_command_time = None
-            self.cmd_pub.publish(Twist())
+            self._publish_stop()
 
     def _navigation_is_allowed(self) -> bool:
         return (

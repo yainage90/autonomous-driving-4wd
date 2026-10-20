@@ -15,6 +15,7 @@ from sensor_msgs.msg import LaserScan
 
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.task import Future
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from rclpy.utilities import remove_ros_args
@@ -24,7 +25,7 @@ from rclpy.clock_type import ClockType
 from rclpy.time import Time
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from vehicle_interfaces.srv import SetNavigationGoal, RegisterNavigation
+from vehicle_interfaces.srv import SetNavigationGoal, RegisterNavigation, PrepareActuator
 from vehicle_interfaces.msg import (
     ControlState,
     NavigationCommand,
@@ -197,6 +198,10 @@ class NavigationManager(Node):
             TwistStamped, 'cmd_vel_auto', self._auto_command_callback, 1,
         )
 
+        self._prepare_client = self.create_client(PrepareActuator, 'prepare_actuator')
+        self._preparing_goal = False
+        self._prepare_future = None
+        self._public_goal_future = None
         self._observation_id = None
         self._events_pub = self.create_publisher(
             String,
@@ -352,12 +357,62 @@ class NavigationManager(Node):
 
         self._set_state(NavigationState.SENDING)
 
-        future = self._action_client.send_goal_async(
-            goal,
-            feedback_callback=self._feedback_callback,
-        )
+        # Keep the public future's acceptance/result contract while first preparing
+        # the actuator asynchronously. No Nav2 action exists if preparation fails.
+        self._preparing_goal = True
+        self._goal_response_deadline = time.monotonic() + 3.0
+        future = Future()
+        self._public_goal_future = future
         future.add_done_callback(self._goal_response_callback)
+        if not self._prepare_client.service_is_ready():
+            self._preparation_failed('Actuator preparation service is unavailable')
+            return future
+        self._prepare_future = self._prepare_client.call_async(PrepareActuator.Request(
+            guard_session=self._control_state.guard_session,
+            manager_session=self._manager_session, epoch=self._control_state.epoch,
+            goal_id=self._observation_id,
+        ))
+        self._prepare_future.add_done_callback(
+            lambda prepared: self._actuator_prepared(prepared, goal, future)
+        )
         return future
+
+    def _preparation_failed(self, reason):
+        self._preparing_goal = False
+        self._goal_response_deadline = None
+        self._navigation_fault = reason
+        self._set_state(NavigationState.FAILED)
+        self._publish_event('actuator_preparation_failed', reason=reason)
+        if self._public_goal_future is not None and not self._public_goal_future.done():
+            # Reject locally: no Nav2 action was submitted, so acceptance is known.
+            self._public_goal_future.set_result(None)
+
+    def _actuator_prepared(self, prepared, goal, public_future):
+        if not self._preparing_goal or public_future is not self._public_goal_future:
+            return
+        try:
+            response = prepared.result()
+            error = self._control_error() or self._readiness_error()
+            if self._navigation_fault is not None:
+                error = self._navigation_fault
+            if not response.success or error or not self.is_stop_confirmed():
+                self._preparation_failed(error or response.message or 'Vehicle is not stationary')
+                return
+            self._preparing_goal = False
+            self._goal_response_deadline = time.monotonic() + 5.0
+            goal.pose.header.stamp = self.get_clock().now().to_msg()
+            actual = self._action_client.send_goal_async(
+                goal, feedback_callback=self._feedback_callback,
+            )
+            def accepted(done):
+                if not public_future.done():
+                    try:
+                        public_future.set_result(done.result())
+                    except Exception as exc:
+                        public_future.set_exception(exc)
+            actual.add_done_callback(accepted)
+        except Exception as exc:
+            self._preparation_failed(f'Actuator preparation failed: {exc}')
 
     def _goal_callback(self, request, response):
         try:
@@ -368,7 +423,7 @@ class NavigationManager(Node):
             return response
 
         response.success = True
-        response.message = 'Goal submitted; waiting for Nav2 acceptance'
+        response.message = 'Goal queued; waiting for actuator preparation and Nav2 acceptance'
         return response
 
     def _goal_pose_callback(self, msg: PoseStamped):
@@ -442,6 +497,8 @@ class NavigationManager(Node):
             )
             return
 
+        if goal_handle is None:
+            return
         self._result_future = self._handle_goal_response(goal_handle)
 
         if self._result_future is not None:
@@ -669,9 +726,12 @@ class NavigationManager(Node):
                 and time.monotonic() >= self._goal_response_deadline
             ):
                 self._goal_response_deadline = None
-                self._fail_navigation(
-                    'Goal response timed out; acceptance is unknown'
-                )
+                if getattr(self, '_preparing_goal', False):
+                    self._preparation_failed('Actuator preparation timed out')
+                else:
+                    self._fail_navigation(
+                        'Goal response timed out; acceptance is unknown'
+                    )
             return
 
         if (

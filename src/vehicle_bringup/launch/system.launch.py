@@ -41,7 +41,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             launch_file_path=f'{description_share}/launch/gazebo.launch.py',
         ),
-        launch_arguments={'world': world}.items(),
+        launch_arguments={
+            'world': world,
+            'safety_params_file': LaunchConfiguration('safety_params_file'),
+        }.items(),
     )
 
     visualization = IncludeLaunchDescription(

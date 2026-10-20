@@ -4,3 +4,7 @@
     max_linear_speed_mps: 0.2
     max_angular_speed_rps: 0.6
     default_speed_mps: 0.0
+    actuator_output_period_sec: 0.05
+    actuator_watchdog_sec: 0.3
+    actuator_heartbeat_timeout_sec: 0.2
+    actuator_status_timeout_sec: 0.2

@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, AppendEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
@@ -25,11 +25,20 @@ def generate_launch_description():
 
     world = LaunchConfiguration('world')
 
+    actuator_share = get_package_share_directory('vehicle_actuator_sim')
+    safety_argument = DeclareLaunchArgument(
+        'safety_params_file', default_value=f'{actuator_share}/config/safety.yaml',
+    )
+    plugin_path = AppendEnvironmentVariable(
+        'GZ_SIM_SYSTEM_PLUGIN_PATH',
+        os.path.join(actuator_share, '..', '..', 'lib'),
+    )
+
     # xacro file path
     xacro_file = os.path.join(pkg_share, 'urdf', 'vehicle.urdf.xacro')
 
     # xacro 명령을 실행하여 URDF 생성
-    robot_description = ParameterValue(Command(['xacro ', xacro_file]), value_type=str)
+    robot_description = ParameterValue(Command(['xacro ', xacro_file, ' safety_config_file:=', LaunchConfiguration('safety_params_file')]), value_type=str)
 
     # Robot State Publisher 노드
     robot_state_publisher_node = Node(
@@ -48,7 +57,6 @@ def generate_launch_description():
         arguments=[
             '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
-            '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
             '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
             '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
             '/ground_truth/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
@@ -93,6 +101,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         world_argument,
+        safety_argument,
+        plugin_path,
         robot_state_publisher_node,
         bridge,
         scan_bridge,

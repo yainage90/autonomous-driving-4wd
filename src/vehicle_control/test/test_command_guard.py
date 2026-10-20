@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import pytest
 import rclpy
@@ -49,6 +49,11 @@ def guard():
 
     try:
         node = CommandGuard()
+        # These tests isolate input selection/validation; receiver contract is tested separately.
+        node.actuator.ready = Mock(return_value=True)
+        node.actuator.block = Mock()
+        node.actuator.check = Mock()
+        node.actuator.send = Mock()
 
         with patch.object(node.cmd_pub, 'publish') as publish_mock:
             yield node, publish_mock
