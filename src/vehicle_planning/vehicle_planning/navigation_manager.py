@@ -12,6 +12,7 @@ from std_srvs.srv import Trigger
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from sensor_msgs.msg import LaserScan
+from unique_identifier_msgs.msg import UUID
 
 import rclpy
 from rclpy.action import ActionClient
@@ -30,6 +31,7 @@ from vehicle_interfaces.msg import (
     ControlState,
     NavigationCommand,
     NavigationPermission,
+    NavigationRecoveryStatus,
 )
 
 from vehicle_planning.readiness import (
@@ -181,6 +183,17 @@ class NavigationManager(Node):
         self._command_start_ns = None
         self._last_ros_time_ns = None
         self._permission_sequence = 0
+        self._generation = 0
+        self._goal_uuid = None
+        self._action_state = 'not_sent'
+        self._recovery_state = 'none'
+        self._fault_reason = ''
+        self._fault_time_ns = 0
+        self._recovery_deadline = None
+        self._recovery_control = None
+        self._recovery_result = 'none'
+        self._recovery_message = ''
+        self._stop_observation_after_ns = None
 
         self._control_subscription = self.create_subscription(
             ControlState, 'control_state', self._control_callback, 1,
@@ -235,6 +248,13 @@ class NavigationManager(Node):
             '~/cancel',
             self._cancel_callback,
         )
+        self._recover_service = self.create_service(
+            Trigger, '~/recover', self._recover_callback,
+        )
+        self._recovery_pub = self.create_publisher(
+            NavigationRecoveryStatus, '~/recovery_status',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
 
         self._tf_buffer = Buffer(node=self)
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -281,6 +301,7 @@ class NavigationManager(Node):
             self._check_navigation_safety,
             clock=self._steady_clock,
         )
+        self._publish_recovery_status()
 
     def _publish_event(self, event: str, **data) -> None:
         payload = {
@@ -302,6 +323,8 @@ class NavigationManager(Node):
         self._events_pub.publish(message)
 
     def send_goal(self, x: float, y: float, yaw: float):
+        if self._recovery_state != 'none':
+            raise RuntimeError('Explicit navigation recovery is required before a new goal')
         if self._state in (
             NavigationState.SENDING,
             NavigationState.RUNNING,
@@ -346,7 +369,13 @@ class NavigationManager(Node):
             self._control_state.guard_session, self._control_state.epoch,
         )
         self._command_start_ns = None
+        self._generation += 1
+        generation = self._generation
         self._observation_id = uuid4().hex
+        self._goal_uuid = UUID(uuid=list(uuid4().bytes))
+        self._action_state = 'not_sent'
+        self._recovery_result = 'none'
+        self._recovery_message = ''
         self._publish_event(
             'goal_submitted',
             frame_id='map',
@@ -363,7 +392,10 @@ class NavigationManager(Node):
         self._goal_response_deadline = time.monotonic() + 3.0
         future = Future()
         self._public_goal_future = future
-        future.add_done_callback(self._goal_response_callback)
+        future.add_done_callback(
+            lambda done: self._goal_response_callback(done)
+            if generation == self._generation and done is self._public_goal_future else None
+        )
         if not self._prepare_client.service_is_ready():
             self._preparation_failed('Actuator preparation service is unavailable')
             return future
@@ -401,8 +433,12 @@ class NavigationManager(Node):
             self._preparing_goal = False
             self._goal_response_deadline = time.monotonic() + 5.0
             goal.pose.header.stamp = self.get_clock().now().to_msg()
+            generation = self._generation
+            self._action_state = 'acceptance_unknown'
             actual = self._action_client.send_goal_async(
-                goal, feedback_callback=self._feedback_callback,
+                goal, goal_uuid=self._goal_uuid,
+                feedback_callback=lambda msg: self._feedback_callback(msg)
+                if generation == self._generation else None,
             )
             def accepted(done):
                 if not public_future.done():
@@ -412,7 +448,13 @@ class NavigationManager(Node):
                         public_future.set_exception(exc)
             actual.add_done_callback(accepted)
         except Exception as exc:
-            self._preparation_failed(f'Actuator preparation failed: {exc}')
+            if self._action_state == 'acceptance_unknown':
+                # A send exception does not prove that the server never received it.
+                self._require_recovery(f'Goal submission failed; acceptance is unknown: {exc}')
+                if not public_future.done():
+                    public_future.set_exception(exc)
+            else:
+                self._preparation_failed(f'Actuator preparation failed: {exc}')
 
     def _goal_callback(self, request, response):
         try:
@@ -485,6 +527,7 @@ class NavigationManager(Node):
         self.get_logger().info(f'State: {state.value}')
 
         self._publish_event('state_changed', state=state.value)
+        self._publish_recovery_status()
 
     def _goal_response_callback(self, future):
         self._goal_response_deadline = None
@@ -492,9 +535,7 @@ class NavigationManager(Node):
         try:
             goal_handle = future.result()
         except Exception as exc:
-            self._fail_navigation(
-                f'Goal response failed; acceptance is unknown: {exc}'
-            )
+            self._require_recovery(f'Goal response failed; acceptance is unknown: {exc}')
             return
 
         if goal_handle is None:
@@ -513,11 +554,13 @@ class NavigationManager(Node):
         )
 
         if not goal_handle.accepted:
+            self._action_state = 'rejected'
             self._set_state(NavigationState.FAILED)
             self.get_logger().error('Goal rejected')
             return None
 
         self._goal_handle = goal_handle
+        self._action_state = 'active'
         self._last_feedback_log_time = None
 
         self._command_start_ns = self.get_clock().now().nanoseconds
@@ -530,9 +573,7 @@ class NavigationManager(Node):
         try:
             return goal_handle.get_result_async()
         except Exception as exc:
-            self._fail_navigation(
-                f'Navigation result request failed: {exc}'
-            )
+            self._require_recovery(f'Navigation result request failed: {exc}')
             return None
 
     def _handle_result(self, response) -> NavigationState:
@@ -550,6 +591,7 @@ class NavigationManager(Node):
         )
 
         self._goal_handle = None
+        self._action_state = 'terminal'
         self._cancel_deadline = None
         self.get_logger().info(f'Action result: {state.value}')
         self._set_state(NavigationState.STOPPING)
@@ -649,6 +691,13 @@ class NavigationManager(Node):
         self._odom_msg = msg
         self._odom_received_at = now
 
+        if (
+            self._stop_observation_after_ns is not None
+            and stamp_ns <= self._stop_observation_after_ns
+        ):
+            self._stationary_since_ns = None
+            return
+
         continuous = (
             self._last_odom_received_at is not None
             and now - self._last_odom_received_at <= 0.5
@@ -706,6 +755,11 @@ class NavigationManager(Node):
         self._stop_deadline = time.monotonic() + 5.0
 
     def _check_state(self):
+        if self._recovery_state != 'none':
+            if self._recovery_state == 'recovering':
+                self._check_recovery()
+            self._publish_recovery_status()
+            return
         if self._state == NavigationState.CANCELING:
             if (
                 self._cancel_deadline is not None
@@ -718,7 +772,7 @@ class NavigationManager(Node):
                 )
                 self._publish_event('cancel_timeout', reason=reason)
                 self.get_logger().error(reason)
-                self._fail_navigation(reason)
+                self._require_recovery(reason)
             return
         if self._state == NavigationState.SENDING:
             if (
@@ -729,9 +783,7 @@ class NavigationManager(Node):
                 if getattr(self, '_preparing_goal', False):
                     self._preparation_failed('Actuator preparation timed out')
                 else:
-                    self._fail_navigation(
-                        'Goal response timed out; acceptance is unknown'
-                    )
+                    self._require_recovery('Goal response timed out; acceptance is unknown')
             return
 
         if (
@@ -752,6 +804,7 @@ class NavigationManager(Node):
             )
 
             self._stop_deadline = None
+            self._require_recovery(str(self._stop_error))
             return
 
         if self.is_stop_confirmed():
@@ -767,13 +820,171 @@ class NavigationManager(Node):
             response = future.result()
         except Exception as exc:
             self._result_error = exc
-            self._fail_navigation(
-                f'Navigation result unavailable: {exc}'
-            )
+            self._require_recovery(f'Navigation result unavailable: {exc}')
             return
 
+        if response is None or response.status not in (
+            GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_CANCELED,
+            GoalStatus.STATUS_ABORTED,
+        ):
+            self._result_error = RuntimeError('Action termination is unknown')
+            self._require_recovery(str(self._result_error))
+            return
         self._pending_result_state = self._handle_result(response)
         self._start_stop_check()
+        if self._recovery_state == 'recovering':
+            self._reset_recovery_observation()
+
+    def _require_recovery(self, reason):
+        if self._recovery_state == 'none':
+            self._fault_reason = reason
+            self._fault_time_ns = time.time_ns()
+            self._recovery_state = 'required'
+            self._publish_event('recovery_required', reason=reason)
+        elif self._recovery_state == 'recovering':
+            self._recovery_failed(reason)
+        self._fail_navigation(reason)
+        self._publish_recovery_status()
+
+    def _recovery_blocker(self):
+        error = self._control_error(check_goal=False) or self._readiness_error()
+        if error:
+            return error
+        if self._action_state == 'acceptance_unknown':
+            return 'Goal acceptance is unknown; wait for its response or restart Nav2, guard and manager'
+        if self._action_state == 'active' and self._goal_handle is None:
+            return 'Previous goal termination cannot be verified; restart Nav2, guard and manager'
+        return None
+
+    def _reset_recovery_observation(self):
+        self._stationary_since_ns = None
+        self._last_odom_stamp_ns = None
+        self._last_odom_received_at = None
+        self._stop_observation_after_ns = self.get_clock().now().nanoseconds
+
+    def _recover_callback(self, _request, response):
+        if self._recovery_state == 'recovering':
+            response.success = True
+            response.message = 'Recovery is already in progress; inspect recovery_status'
+            return response
+        if self._recovery_state == 'none':
+            response.success = (
+                self._state == NavigationState.WAITING
+                and self._recovery_result == 'succeeded'
+            )
+            response.message = 'Already recovered' if response.success else 'No recovery-required fault'
+            return response
+        error = self._recovery_blocker()
+        if error:
+            self._recovery_result = 'rejected'
+            self._recovery_message = error
+            self._publish_recovery_status()
+            response.message = error
+            return response
+
+        self._recovery_state = 'recovering'
+        self._recovery_result = 'in_progress'
+        self._recovery_message = 'Recovery accepted; inspect recovery_status for completion'
+        self._recovery_deadline = time.monotonic() + 5.0
+        self._recovery_control = (self._control_state.guard_session, self._control_state.epoch)
+        self._reset_recovery_observation()
+        self._publish_event('recovery_started')
+        self._navigation_pub.publish(Bool(data=False))
+        self._permission_pub.publish(self._make_permission(False))
+        if self._action_state == 'active':
+            handle = self._goal_handle
+            try:
+                # A completed response may still have its callback queued. Keep it:
+                # only a missing query or an observed failure warrants a new query.
+                if self._result_future is None or self._result_error is not None:
+                    self._result_error = None
+                    self._result_future = handle.get_result_async()
+                    self._result_future.add_done_callback(self._result_callback)
+                if self._recovery_state == 'recovering' and self._action_state == 'active':
+                    self._set_state(NavigationState.CANCELING)
+                    future = handle.cancel_goal_async()
+                    future.add_done_callback(
+                        lambda done: self._handle_cancel_response(done, handle)
+                    )
+            except Exception as exc:
+                self._recovery_failed(f'Previous goal cleanup failed: {exc}')
+        response.success = True
+        response.message = 'Recovery accepted; inspect recovery_status for completion'
+        self._publish_recovery_status()
+        return response
+
+    def _recovery_failed(self, reason):
+        self._recovery_state = 'required'
+        self._recovery_deadline = None
+        self._recovery_result = 'failed'
+        self._recovery_message = reason
+        self._publish_event('recovery_failed', reason=reason)
+        self._publish_recovery_status()
+
+    def _check_recovery(self):
+        reason = self._recovery_blocker()
+        current_control = (
+            (self._control_state.guard_session, self._control_state.epoch)
+            if self._control_state is not None else None
+        )
+        if current_control != self._recovery_control:
+            reason = 'Control session changed during recovery'
+        if time.monotonic() >= self._recovery_deadline:
+            reason = 'Recovery timed out; previous action termination and fresh stop are required'
+        if reason:
+            self._recovery_failed(reason)
+            return
+        if self._action_state == 'active' or not self.is_stop_confirmed():
+            return
+
+        # Retire every callback from the old attempt before admitting another goal.
+        self._generation += 1
+        self._goal_handle = None
+        self._result_future = None
+        self._prepare_future = None
+        self._public_goal_future = None
+        self._preparing_goal = False
+        self._pending_result_state = None
+        self._goal_response_deadline = None
+        self._cancel_deadline = None
+        self._stop_deadline = None
+        self._result_error = None
+        self._stop_error = None
+        self._command_start_ns = None
+        self._stop_observation_after_ns = None
+        self._goal_control = None
+        self._navigation_fault = None
+        self._fault_reason = ''
+        self._fault_time_ns = 0
+        self._recovery_deadline = None
+        self._recovery_state = 'none'
+        self._recovery_result = 'succeeded'
+        self._recovery_message = 'Recovered; submit a new goal to drive'
+        self._set_state(NavigationState.WAITING)
+        self._publish_event('recovery_completed')
+
+    def _publish_recovery_status(self):
+        control_error = self._control_error(check_goal=False)
+        data_error = self._readiness_error()
+        stopped = self.is_stop_confirmed()
+        blocker = self._recovery_blocker() or ''
+        if self._recovery_state != 'none' and not blocker:
+            if self._action_state == 'active':
+                blocker = 'Waiting for the final action result'
+            elif not stopped:
+                blocker = 'Waiting for fresh continuous stationary odometry'
+            elif self._recovery_state == 'required':
+                blocker = 'Explicit recovery request required'
+        self._recovery_pub.publish(NavigationRecoveryStatus(
+            manager_session=self._manager_session, navigation_state=self._state.value,
+            recovery_state=self._recovery_state, fault_reason=self._fault_reason,
+            fault_time_ns=self._fault_time_ns, attempt_id=self._observation_id or '',
+            goal_id=bytes(self._goal_uuid.uuid).hex() if self._goal_uuid else '',
+            action_state=self._action_state, stop_confirmed=stopped,
+            data_ready=data_error is None, control_ready=control_error is None,
+            blocker=blocker, last_result=self._recovery_result,
+            last_message=self._recovery_message,
+        ))
 
     def _sensor_is_fresh(self, msg, received_at) -> bool:
         stamp_ns = (
@@ -843,6 +1054,12 @@ class NavigationManager(Node):
                 self._retired_guard_sessions.add(previous.guard_session)
         self._control_state = msg
         self._control_received_at = time.monotonic()
+        if self._recovery_state == 'recovering':
+            error = self._control_error(check_goal=False)
+            if (msg.guard_session, msg.epoch) != self._recovery_control:
+                error = 'Control session changed during recovery'
+            if error:
+                self._recovery_failed(error)
         reason = self._control_error()
         if self._state in (
             NavigationState.SENDING,
@@ -851,7 +1068,7 @@ class NavigationManager(Node):
         ) and reason is not None:
             self._fail_navigation(reason)
 
-    def _control_error(self):
+    def _control_error(self, *, check_goal=True):
         control = self._control_state
         if (
             control is None or self._control_received_at is None
@@ -864,7 +1081,7 @@ class NavigationManager(Node):
             return 'Manager restarted; restart Nav2 and command_guard together (issue 004)'
         if control.emergency_stop or not control.auto_mode:
             return 'Autonomous control is disabled'
-        if self._state in (
+        if check_goal and self._state in (
             NavigationState.SENDING,
             NavigationState.RUNNING,
             NavigationState.CANCELING,
@@ -906,7 +1123,8 @@ class NavigationManager(Node):
 
     def _auto_command_callback(self, msg):
         if (
-            self._state != NavigationState.RUNNING
+            self._recovery_state != 'none'
+            or self._state != NavigationState.RUNNING
             or self._navigation_fault is not None
             or self._control_error() is not None
             or self._command_start_ns is None
@@ -931,6 +1149,8 @@ class NavigationManager(Node):
             and now_ns < self._last_ros_time_ns
         )
         self._last_ros_time_ns = now_ns
+        if clock_reversed and self._recovery_state == 'recovering':
+            self._recovery_failed('ROS clock moved backwards during recovery')
         if (
             self._state in (
                 NavigationState.SENDING,
@@ -947,11 +1167,13 @@ class NavigationManager(Node):
 
         allowed = (
             self._state == NavigationState.RUNNING
+            and self._recovery_state == 'none'
             and self._navigation_fault is None
             and self._control_error() is None
         )
         self._navigation_pub.publish(Bool(data=allowed))
         self._permission_pub.publish(self._make_permission(allowed))
+        self._publish_recovery_status()
 
     def _fail_navigation(self, reason: str):
         if self._navigation_fault is not None:

@@ -20,6 +20,18 @@ from vehicle_planning.navigation_manager import (
 )
 
 
+class ManagerStub(SimpleNamespace):
+    """Legacy callback fixtures with the new recovery hooks stubbed out."""
+
+    def __init__(self, **kwargs):
+        defaults = dict(
+            _recovery_state='none', _stop_observation_after_ns=None,
+            _require_recovery=Mock(), _publish_recovery_status=Mock(),
+        )
+        defaults.update(kwargs)
+        super().__init__(**defaults)
+
+
 def test_build_goal_sets_map_pose():
     goal = build_goal(1.0, -2.0, math.pi / 2.0)
     pose = goal.pose.pose
@@ -103,7 +115,7 @@ def test_classify_result(status, error_code, expected):
 ])
 def test_send_goal_rejects_new_goal_while_busy(state):
     action_client = Mock()
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=state,
         _action_client=action_client,
     )
@@ -118,7 +130,7 @@ def test_send_goal_rejects_new_goal_while_busy(state):
 
 def test_cancel_goal_requests_cancellation_and_keeps_handle():
     goal_handle = Mock()
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.RUNNING,
         _goal_handle=goal_handle,
         _set_state=Mock(),
@@ -152,7 +164,7 @@ def test_result_callback_preserves_goal_until_result_is_known(
     )
     future.result.side_effect = result_error
 
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _goal_handle=goal_handle,
         _result_future=future,
         _pending_result_state=None,
@@ -191,7 +203,7 @@ def test_result_callback_preserves_goal_until_result_is_known(
         assert sender._result_error is result_error
         sender._set_state.assert_not_called()
         sender._start_stop_check.assert_not_called()
-        sender._fail_navigation.assert_called_once()
+        sender._require_recovery.assert_called_once()
         sender._publish_event.assert_not_called()
 
 
@@ -220,7 +232,7 @@ def test_handle_cancel_response(
     state, return_code, expected_state_change
 ):
     goal_handle = object()
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=state,
         _goal_handle=(
             None if state == NavigationState.CANCELED else goal_handle
@@ -255,7 +267,7 @@ def test_handle_cancel_response(
     'No running goal to cancel',
 ])
 def test_cancel_callback_reports_request_outcome(error):
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         cancel_goal=Mock(
             side_effect=RuntimeError(error) if error else None
         ),
@@ -317,7 +329,7 @@ def test_is_stationary(
 def test_stop_confirmation_requires_continuous_fresh_odometry(
     monkeypatch, measurement_delay_ns,
 ):
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _stationary_since_ns=None,
         _last_odom_stamp_ns=None,
         _last_odom_received_at=None,
@@ -380,7 +392,7 @@ def test_stop_confirmation_requires_continuous_fresh_odometry(
 def test_stop_timer_checks_fresh_observation(
     monkeypatch, confirmed, checked_at
 ):
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.STOPPING,
         _pending_result_state=NavigationState.CANCELED,
         _stationary_since_ns=1_000_000_000,
@@ -421,7 +433,7 @@ def test_stop_timer_checks_fresh_observation(
 
 
 def test_goal_response_error_keeps_acceptance_unknown():
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.SENDING,
         _result_future=None,
         _handle_goal_response=Mock(),
@@ -435,11 +447,11 @@ def test_goal_response_error_keeps_acceptance_unknown():
 
     assert sender._state == NavigationState.SENDING
     assert sender._result_future is None
-    sender._fail_navigation.assert_called_once()
+    sender._require_recovery.assert_called_once()
 
 
 def test_goal_response_timeout_keeps_new_goals_blocked(monkeypatch):
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.SENDING,
         _goal_response_deadline=5.0,
         get_logger=Mock(),
@@ -455,7 +467,7 @@ def test_goal_response_timeout_keeps_new_goals_blocked(monkeypatch):
 
     assert sender._state == NavigationState.SENDING
     assert sender._goal_response_deadline is None
-    sender._fail_navigation.assert_called_once_with(
+    sender._require_recovery.assert_called_once_with(
         'Goal response timed out; acceptance is unknown'
     )
 
@@ -464,7 +476,7 @@ def test_send_goal_rejects_unready_navigation():
     action_client = Mock()
     action_client.server_is_ready.return_value = True
 
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.WAITING,
         _action_client=action_client,
         _readiness_error=Mock(
@@ -481,7 +493,7 @@ def test_send_goal_rejects_unready_navigation():
 
 def test_safety_fault_keeps_motion_blocked_after_data_recovers():
     reason = 'Scan is unavailable, invalid, or stale'
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.RUNNING,
         _navigation_fault=None,
         _goal_handle=Mock(),
@@ -530,7 +542,7 @@ def test_safety_fault_keeps_motion_blocked_after_data_recovers():
 
 
 def test_late_acceptance_after_fault_waits_for_result_and_stop():
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.SENDING,
         _navigation_fault='Scan interrupted',
         _goal_handle=None,
@@ -640,7 +652,7 @@ def test_invalid_goal_pose_is_not_submitted(invalid_case):
     elif invalid_case == 'non_planar':
         msg.pose.position.z = 1.0
 
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         send_goal=Mock(),
         get_logger=Mock(),
     )
@@ -656,7 +668,7 @@ def test_goal_pose_busy_rejection_is_logged():
     msg.header.frame_id = 'map'
     msg.pose.orientation.w = 1.0
 
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         send_goal=Mock(side_effect=RuntimeError('Navigation is busy')),
         get_logger=Mock(),
     )
@@ -701,7 +713,7 @@ def test_result_waits_for_stop_before_terminal_state(
         result=NavigateToPose.Result(),
     )
 
-    sender = SimpleNamespace(
+    sender = ManagerStub(
         _state=NavigationState.RUNNING,
         _goal_handle=object(),
         _result_future=future,

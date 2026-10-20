@@ -70,7 +70,8 @@ def test_sample_at_rejects_simulation_time_reset():
         sample_at([first, reset], 2_000_000_000)
 
 
-def test_summary_preserves_canceled_action_and_failed_final_state():
+@pytest.mark.parametrize('recovered', [False, True])
+def test_summary_preserves_canceled_action_and_failed_final_state(recovered):
     def event(kind, sec, data):
         return {
             'schema_version': 1,
@@ -94,6 +95,12 @@ def test_summary_preserves_canceled_action_and_failed_final_state():
         }),
         event('state_changed', 3, {'state': 'failed'}),
     ]
+    if recovered:
+        events.extend([
+            event('recovery_started', 4, {}),
+            event('state_changed', 5, {'state': 'waiting'}),
+            event('recovery_completed', 5, {}),
+        ])
 
     samples = []
     for sec, x in [(1, -2.0), (3, -1.0)]:
@@ -111,3 +118,18 @@ def test_summary_preserves_canceled_action_and_failed_final_state():
     assert report['final_state'] == 'failed'
     assert report['position_error_m'] == pytest.approx(0.0)
     assert report['submitted_to_terminal_wall_sec'] == pytest.approx(2.0)
+
+
+def test_recovery_completion_without_navigation_terminal_is_not_success():
+    events = [
+        dict(schema_version=1, attempt_id='attempt', event=kind,
+             ros_time_ns=index * 10**9, monotonic_ns=index * 10**9, data=data)
+        for index, (kind, data) in enumerate([
+            ('goal_submitted', {'frame_id': 'map', 'x': 1., 'y': 0., 'yaw': 0.}),
+            ('recovery_required', {'reason': 'Stop timed out'}),
+            ('state_changed', {'state': 'waiting'}),
+            ('recovery_completed', {}),
+        ], start=1)
+    ]
+    with pytest.raises(ValueError, match='terminal'):
+        summarize_run(events, [], (0., 0., 0.))

@@ -158,7 +158,8 @@ def test_cancel_rejection_and_timeout_keep_goal_blocked(system, monkeypatch):
     system.manager._check_state()
     assert system.manager._cancel_deadline is None
     stopped(system)
-    with pytest.raises(RuntimeError, match='busy'):
+    assert system.manager._recovery_state == 'required'
+    with pytest.raises(RuntimeError, match='recovery'):
         system.manager.send_goal(2.0, 0.0, 0.0)
 
 

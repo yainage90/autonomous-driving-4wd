@@ -73,6 +73,7 @@ TOPICS = [
     '/navigation_permission',
     '/navigation_command',
     '/navigation_manager/events',
+    '/navigation_manager/recovery_status',
     '/rosout',
 ]
 
