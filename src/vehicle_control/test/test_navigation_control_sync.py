@@ -18,7 +18,11 @@ from std_srvs.srv import SetBool
 
 from vehicle_control.command_guard import CommandGuard
 from vehicle_interfaces.msg import NavigationCommand
-from vehicle_planning.navigation_manager import NavigationManager, NavigationState
+from vehicle_planning.navigation_manager import (
+    NavigationManager,
+    NavigationState,
+    RecoveryState,
+)
 
 
 def wait(executor, predicate, timeout=3.0):
@@ -158,7 +162,7 @@ def test_cancel_rejection_and_timeout_keep_goal_blocked(system, monkeypatch):
     system.manager._check_state()
     assert system.manager._cancel_deadline is None
     stopped(system)
-    assert system.manager._recovery_state == 'required'
+    assert system.manager._recovery_state == RecoveryState.REQUIRED
     with pytest.raises(RuntimeError, match='recovery'):
         system.manager.send_goal(2.0, 0.0, 0.0)
 

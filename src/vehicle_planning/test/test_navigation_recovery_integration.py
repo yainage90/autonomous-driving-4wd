@@ -16,7 +16,13 @@ from rclpy.task import Future
 from std_srvs.srv import Trigger
 from vehicle_interfaces.msg import ControlState, NavigationRecoveryStatus
 from vehicle_interfaces.srv import PrepareActuator, SetNavigationGoal
-from vehicle_planning.navigation_manager import NavigationManager, NavigationState
+from vehicle_planning.navigation_manager import (
+    NavigationManager,
+    NavigationState,
+    RecoveryState,
+    ActionState,
+    RecoveryResult,
+)
 
 
 def wait(system, predicate, timeout=4.):
@@ -139,16 +145,18 @@ def test_stop_timeout_service_recovery_and_new_goal(system):
     system.feed = False
     system.result_gate.set_result(True)
     wait(system, lambda: manager._state == NavigationState.STOPPING)
-    wait(system, lambda: manager._recovery_state == 'required', timeout=6.)
+    wait(system, lambda: manager._recovery_state == RecoveryState.REQUIRED, timeout=6.)
     system.feed = True
     wait(system, manager.is_stop_confirmed)
-    assert manager._recovery_state == 'required'
+    assert manager._recovery_state == RecoveryState.REQUIRED
     assert call(system, system.recover).success
     deadline = manager._recovery_deadline
     assert call(system, system.recover).success
     assert manager._recovery_deadline == deadline
     wait(system, lambda: manager._state == NavigationState.WAITING)
     wait(system, lambda: system.statuses[-1].last_result == 'succeeded')
+    assert system.statuses[-1].recovery_state == 'none'
+    assert system.statuses[-1].action_state == 'terminal'
     assert manager._command_start_ns is None
     # Late-joining observers receive the durable current snapshot.
     snapshots = []
@@ -172,17 +180,17 @@ def test_late_acceptance_requires_targeted_cancel_and_explicit_recovery(system):
     wait(system, lambda: system.received)
     # Expire only the manager deadline; action transport still holds its response.
     manager._goal_response_deadline = time.monotonic() - .1
-    wait(system, lambda: manager._recovery_state == 'required')
+    wait(system, lambda: manager._recovery_state == RecoveryState.REQUIRED)
     assert not call(system, system.recover).success
     system.acceptance_gate.set_result(True)
     wait(system, lambda: system.cancels == 1)
     wait(system, lambda: system.handle is not None and system.handle.is_cancel_requested)
     assert call(system, system.recover).success
     assert call(system, system.recover).success
-    assert manager._action_state == 'active'
+    assert manager._action_state == ActionState.ACTIVE
     system.result_gate.set_result(True)
-    wait(system, lambda: manager._action_state == 'terminal')
-    assert manager._recovery_state == 'recovering'
+    wait(system, lambda: manager._action_state == ActionState.TERMINAL)
+    assert manager._recovery_state == RecoveryState.RECOVERING
     wait(system, lambda: manager._state == NavigationState.WAITING)
-    assert manager._recovery_result == 'succeeded'
+    assert manager._recovery_result == RecoveryResult.SUCCEEDED
     assert system.cancels <= 2  # one original safety request and one recovery attempt

@@ -12,7 +12,13 @@ from rclpy.task import Future
 from rclpy.time import Time
 from std_srvs.srv import Trigger
 from vehicle_interfaces.msg import ControlState
-from vehicle_planning.navigation_manager import NavigationManager, NavigationState
+from vehicle_planning.navigation_manager import (
+    NavigationManager,
+    NavigationState,
+    RecoveryState,
+    ActionState,
+    RecoveryResult,
+)
 
 
 @pytest.fixture
@@ -33,7 +39,7 @@ def rig(monkeypatch):
     manager._control_received_at = 10.0
     manager._state = NavigationState.STOPPING
     manager._pending_result_state = NavigationState.SUCCEEDED
-    manager._action_state = 'terminal'
+    manager._action_state = ActionState.TERMINAL
     manager._stop_deadline = 9.0
     try:
         yield SimpleNamespace(manager=manager, clock=clock, events=events)
@@ -67,7 +73,7 @@ def stationary(rig, start):
 
 def require(rig):
     rig.manager._check_state()
-    assert rig.manager._recovery_state == 'required'
+    assert rig.manager._recovery_state == RecoveryState.REQUIRED
 
 
 def test_stop_timeout_requires_request_and_new_stationary_window(rig):
@@ -89,7 +95,7 @@ def test_stop_timeout_requires_request_and_new_stationary_window(rig):
     assert manager._stationary_since_ns is None
     stationary(rig, 11.2)
     assert manager._state == NavigationState.WAITING
-    assert manager._recovery_result == 'succeeded'
+    assert manager._recovery_result == RecoveryResult.SUCCEEDED
     assert manager._fault_reason == ''
     assert reason and stamp > 0
     assert recover(manager).success
@@ -118,7 +124,7 @@ def test_invalid_observation_cannot_complete_recovery(rig, failure):
         observe(rig, 9.0)
     manager._control_received_at = rig.clock.return_value
     manager._check_state()
-    assert manager._recovery_state == 'recovering'
+    assert manager._recovery_state == RecoveryState.RECOVERING
     assert manager._state != NavigationState.WAITING
 
 
@@ -138,32 +144,32 @@ def test_unsafe_recovery_request_is_rejected_without_resetting_fault(rig, monkey
     else:
         monkeypatch.setattr(manager, '_readiness_error', lambda: 'Scan is stale')
     assert not recover(manager).success
-    assert manager._recovery_state == 'required'
+    assert manager._recovery_state == RecoveryState.REQUIRED
     assert (manager._fault_reason, manager._fault_time_ns) == original
-    assert manager._recovery_result == 'rejected'
+    assert manager._recovery_result == RecoveryResult.REJECTED
 
 
 def test_unknown_acceptance_remains_blocked_even_if_stationary(rig):
     manager = rig.manager
     manager._state = NavigationState.SENDING
-    manager._action_state = 'acceptance_unknown'
+    manager._action_state = ActionState.ACCEPTANCE_UNKNOWN
     manager._goal_response_deadline = 9.0
     require(rig)
     stationary(rig, 10.0)
     assert not recover(manager).success
     assert 'acceptance is unknown' in manager._recovery_message
-    assert manager._action_state == 'acceptance_unknown'
+    assert manager._action_state == ActionState.ACCEPTANCE_UNKNOWN
 
 
 def test_late_rejection_still_needs_explicit_recovery(rig):
     manager = rig.manager
     manager._state = NavigationState.SENDING
-    manager._action_state = 'acceptance_unknown'
+    manager._action_state = ActionState.ACCEPTANCE_UNKNOWN
     manager._goal_response_deadline = 9.0
     require(rig)
     manager._handle_goal_response(SimpleNamespace(accepted=False))
     stationary(rig, 10.0)
-    assert manager._recovery_state == 'required'
+    assert manager._recovery_state == RecoveryState.REQUIRED
     assert recover(manager).success
     stationary(rig, 11.2)
     assert manager._state == NavigationState.WAITING
@@ -175,13 +181,13 @@ def test_failed_result_query_retries_only_owned_goal_and_waits_for_termination(r
     handle.cancel_goal_async.side_effect = lambda: Future()
     handle.get_result_async.side_effect = lambda: Future()
     manager._goal_handle = handle
-    manager._action_state = 'active'
+    manager._action_state = ActionState.ACTIVE
     manager._state = NavigationState.CANCELING
     failed = Future()
     failed.set_exception(RuntimeError('Lost result response'))
     manager._result_future = failed
     manager._result_callback(failed)
-    assert manager._recovery_state == 'required'
+    assert manager._recovery_state == RecoveryState.REQUIRED
     assert recover(manager).success
     result = manager._result_future
     assert result is not failed
@@ -189,13 +195,13 @@ def test_failed_result_query_retries_only_owned_goal_and_waits_for_termination(r
     handle.cancel_goal_async.assert_called_once()
     handle.get_result_async.assert_called_once()
     stationary(rig, 10.1)
-    assert manager._recovery_state == 'recovering'
+    assert manager._recovery_state == RecoveryState.RECOVERING
     # Retired query cannot overwrite the current future.
     manager._result_callback(failed)
-    assert manager._recovery_state == 'recovering'
+    assert manager._recovery_state == RecoveryState.RECOVERING
     result.set_result(SimpleNamespace(
         status=GoalStatus.STATUS_CANCELED, result=NavigateToPose.Result()))
-    assert manager._action_state == 'terminal'
+    assert manager._action_state == ActionState.TERMINAL
     assert not manager.is_stop_confirmed()
     stationary(rig, 11.3)
     assert manager._state == NavigationState.WAITING
@@ -206,15 +212,15 @@ def test_failed_result_query_retries_only_owned_goal_and_waits_for_termination(r
 @pytest.mark.parametrize('status', [GoalStatus.STATUS_UNKNOWN, GoalStatus.STATUS_EXECUTING])
 def test_nonterminal_result_is_not_termination_evidence(rig, status):
     manager = rig.manager
-    manager._action_state = 'active'
+    manager._action_state = ActionState.ACTIVE
     manager._state = NavigationState.CANCELING
     handle = manager._goal_handle = Mock()
     future = manager._result_future = Future()
     future.set_result(SimpleNamespace(status=status, result=NavigateToPose.Result()))
     manager._result_callback(future)
-    assert manager._recovery_state == 'required'
+    assert manager._recovery_state == RecoveryState.REQUIRED
     assert manager._goal_handle is handle
-    assert manager._action_state == 'active'
+    assert manager._action_state == ActionState.ACTIVE
 
 
 @pytest.mark.parametrize('failure', ['timeout', 'epoch', 'emergency', 'sensor', 'clock'])
@@ -237,8 +243,8 @@ def test_recovery_failure_preserves_original_error(rig, monkeypatch, failure):
         monkeypatch.setattr(manager, '_ensure_registration', lambda: None)
         manager._check_navigation_safety()
     manager._check_state()
-    assert manager._recovery_state == 'required'
-    assert manager._recovery_result == 'failed'
+    assert manager._recovery_state == RecoveryState.REQUIRED
+    assert manager._recovery_result == RecoveryResult.FAILED
     assert (manager._fault_reason, manager._fault_time_ns) == original
 
 
@@ -246,7 +252,7 @@ def test_no_recovery_request_during_normal_operation(rig):
     manager = rig.manager
     manager._state = NavigationState.RUNNING
     assert not recover(manager).success
-    assert manager._recovery_state == 'none'
+    assert manager._recovery_state == RecoveryState.NONE
 
 
 def test_retired_acceptance_preparation_feedback_and_result_cannot_change_new_goal(rig, monkeypatch):
@@ -306,7 +312,7 @@ def test_retired_acceptance_preparation_feedback_and_result_cannot_change_new_go
 
 def test_cancel_rejection_does_not_complete_recovery_and_retry_can_succeed(rig):
     manager = rig.manager
-    manager._action_state = 'active'
+    manager._action_state = ActionState.ACTIVE
     manager._state = NavigationState.CANCELING
     manager._goal_handle = handle = Mock()
     result = manager._result_future = Future()
@@ -321,16 +327,16 @@ def test_cancel_rejection_does_not_complete_recovery_and_retry_can_succeed(rig):
     manager._handle_cancel_response(rejection, handle)
     assert manager._state == NavigationState.CANCELING
     stationary(rig, 10.1)
-    assert manager._recovery_state == 'recovering'
+    assert manager._recovery_state == RecoveryState.RECOVERING
     rig.clock.return_value = 15.
     manager._control_received_at = 15.
     manager._check_state()
-    assert manager._recovery_state == 'required'
+    assert manager._recovery_state == RecoveryState.REQUIRED
     assert (manager._fault_reason, manager._fault_time_ns) == original
     result.set_result(SimpleNamespace(
         status=GoalStatus.STATUS_ABORTED, result=NavigateToPose.Result()))
     manager._result_callback(result)
-    assert manager._recovery_state == 'required'
+    assert manager._recovery_state == RecoveryState.REQUIRED
     assert recover(manager).success
     stationary(rig, 15.1)
     assert manager._state == NavigationState.WAITING
@@ -345,14 +351,14 @@ def test_fast_control_transition_is_detected_between_recovery_ticks(rig):
     manager._control_callback(ControlState(
         guard_session=control.guard_session, manager_session=control.manager_session,
         epoch=control.epoch + 1, heartbeat=control.heartbeat + 1, auto_mode=False))
-    assert manager._recovery_state == 'required'
-    assert manager._recovery_result == 'failed'
+    assert manager._recovery_state == RecoveryState.REQUIRED
+    assert manager._recovery_result == RecoveryResult.FAILED
 
 
 def test_completed_result_with_queued_callback_is_not_replaced(rig):
     manager = rig.manager
     manager._state = NavigationState.CANCELING
-    manager._action_state = 'active'
+    manager._action_state = ActionState.ACTIVE
     handle = manager._goal_handle = Mock()
     future = manager._result_future = Future()
     future.set_result(SimpleNamespace(
@@ -363,6 +369,6 @@ def test_completed_result_with_queued_callback_is_not_replaced(rig):
     handle.get_result_async.assert_not_called()
     # The already queued original callback remains valid and starts a new stop window.
     manager._result_callback(future)
-    assert manager._action_state == 'terminal'
+    assert manager._action_state == ActionState.TERMINAL
     stationary(rig, 10.1)
     assert manager._state == NavigationState.WAITING

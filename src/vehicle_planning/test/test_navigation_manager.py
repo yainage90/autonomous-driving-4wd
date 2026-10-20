@@ -12,6 +12,7 @@ from geometry_msgs.msg import PoseStamped
 
 from vehicle_planning.navigation_manager import (
     NavigationState,
+    RecoveryState,
     build_goal,
     classify_result,
     NavigationManager,
@@ -25,7 +26,7 @@ class ManagerStub(SimpleNamespace):
 
     def __init__(self, **kwargs):
         defaults = dict(
-            _recovery_state='none', _stop_observation_after_ns=None,
+            _recovery_state=RecoveryState.NONE, _stop_observation_after_ns=None,
             _require_recovery=Mock(), _publish_recovery_status=Mock(),
         )
         defaults.update(kwargs)
