@@ -652,3 +652,85 @@ def test_goal_pose_busy_rejection_is_logged():
 
     sender.send_goal.assert_called_once_with(0.0, 0.0, 0.0)
     sender.get_logger.return_value.warning.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'status, expected_state',
+    [
+        pytest.param(
+            GoalStatus.STATUS_SUCCEEDED,
+            NavigationState.SUCCEEDED,
+            id='succeeded',
+        ),
+        pytest.param(
+            GoalStatus.STATUS_ABORTED,
+            NavigationState.FAILED,
+            id='failed',
+        ),
+        pytest.param(
+            GoalStatus.STATUS_CANCELED,
+            NavigationState.CANCELED,
+            id='canceled',
+        ),
+    ],
+)
+def test_result_waits_for_stop_before_terminal_state(
+    monkeypatch, status, expected_state,
+):
+    monkeypatch.setattr(
+        'vehicle_planning.navigation_manager.time.monotonic',
+        Mock(return_value=10.0),
+    )
+
+    future = Mock()
+    future.result.return_value = SimpleNamespace(
+        status=status,
+        result=NavigateToPose.Result(),
+    )
+
+    sender = SimpleNamespace(
+        _state=NavigationState.RUNNING,
+        _goal_handle=object(),
+        _result_future=future,
+        _pending_result_state=None,
+        _navigation_fault=None,
+        is_stop_confirmed=Mock(return_value=False),
+        get_logger=Mock(),
+        _publish_event=Mock(),
+    )
+
+    def set_state(state):
+        sender._state = state
+
+    sender._set_state = Mock(side_effect=set_state)
+    sender._handle_result = lambda response: (
+        NavigationManager._handle_result(sender, response)
+    )
+    sender._start_stop_check = lambda: (
+        NavigationManager._start_stop_check(sender)
+    )
+
+    # 결과를 받아도 바로 최종 상태로 전환하면 안 된다.
+    NavigationManager._result_callback(sender, future)
+
+    assert sender._pending_result_state == expected_state
+    assert sender._goal_handle is None
+    assert sender._state == NavigationState.STOPPING
+    sender._set_state.assert_called_once_with(
+        NavigationState.STOPPING
+    )
+
+    # 정지가 확인되지 않으면 STOPPING을 유지한다.
+    NavigationManager._check_state(sender)
+
+    assert sender._state == NavigationState.STOPPING
+    assert sender._set_state.call_count == 1
+
+    # 정지 확인 후에만 액션 결과에 해당하는 상태로 종료한다.
+    sender.is_stop_confirmed.return_value = True
+    NavigationManager._check_state(sender)
+
+    assert sender._state == expected_state
+    assert sender._stop_deadline is None
+    assert sender._set_state.call_count == 2
+    sender._set_state.assert_called_with(expected_state)
