@@ -1,161 +1,108 @@
+"""Select an environment independently of the driving mode."""
+import math
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory as share
 from launch import LaunchDescription
-from ament_index_python.packages import get_package_share_directory
-from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
-from launch.conditions import LaunchConfigurationEquals
+from launch.substitutions import LaunchConfiguration
+
+
+def configure(context):
+    value = lambda name: LaunchConfiguration(name).perform(context)
+    backend, mode = value('backend'), value('mode')
+    simulation = backend == 'simulation'
+    use_sim_time = 'true' if simulation else 'false'
+    if value('use_sim_time') not in ('auto', use_sim_time):
+        raise ValueError(f'backend={backend} requires use_sim_time={use_sim_time}')
+    if not simulation and value('hardware_driver') != 'mock':
+        raise RuntimeError('Hardware driver real is not implemented; explicitly select hardware_driver:=mock for tests')
+    if simulation and not all(math.isfinite(float(value(name))) for name in (
+            'spawn_x', 'spawn_y', 'spawn_z', 'spawn_roll', 'spawn_pitch', 'spawn_yaw')):
+        raise ValueError('Spawn pose values must be finite')
+
+    defaults = {'safety_params_file': f"{share('vehicle_bringup')}/config/safety.yaml"}
+    if mode == 'navigation' or not simulation:
+        defaults['map'] = f"{share('vehicle_localization')}/maps/evaluation.yaml"
+    if mode == 'mapping':
+        defaults['slam_params_file'] = f"{share('vehicle_localization')}/config/slam.yaml"
+    if mode == 'navigation':
+        defaults.update({
+            'amcl_params_file': f"{share('vehicle_localization')}/config/amcl.yaml",
+            'nav2_params_file': f"{share('vehicle_planning')}/config/nav2.yaml",
+            'controller_params_file': f"{share('vehicle_control')}/config/controller.yaml",
+        })
+    if simulation:
+        defaults.update({
+            'world': f"{share('vehicle_simulation')}/worlds/evaluation.sdf",
+            'lidar_config_file': f"{share('vehicle_simulation')}/config/lidar.yaml",
+            'simulation_config_file': f"{share('vehicle_simulation')}/config/simulation.yaml",
+        })
+    resolved = {}
+    for name, default in defaults.items():
+        resolved[name] = value(name) or default
+        if not Path(resolved[name]).is_file():
+            raise ValueError(f'{name} file does not exist: {resolved[name]}')
+    if 'map' in resolved:
+        import yaml
+        map_path = Path(resolved['map'])
+        metadata = yaml.safe_load(map_path.read_text())
+        image = map_path.parent / metadata['image']
+        if not image.is_file():
+            raise ValueError(f'Map image does not exist: {image}')
+
+    def include(package, filename, arguments):
+        return IncludeLaunchDescription(PythonLaunchDescriptionSource(
+            f'{share(package)}/launch/{filename}'), launch_arguments=arguments.items())
+
+    if simulation:
+        backend_args = {name: resolved[name] for name in (
+            'world', 'safety_params_file', 'lidar_config_file', 'simulation_config_file')}
+        backend_args.update({name: value(name) for name in (
+            'gazebo_gui', 'headless_rendering', 'spawn_x', 'spawn_y', 'spawn_z',
+            'spawn_roll', 'spawn_pitch', 'spawn_yaw')})
+        actions = [include('vehicle_simulation', 'gazebo.launch.py', backend_args)]
+    else:
+        actions = [include('vehicle_drivers', 'hardware.launch.py', {
+            'hardware_driver': value('hardware_driver'), 'map': resolved['map'],
+            'safety_params_file': resolved['safety_params_file'],
+        })]
+    common_args = {**resolved, 'mode': mode, 'use_sim_time': use_sim_time,
+                   'manager_odom_topic': value('manager_odom_topic')}
+    actions.append(include('vehicle_bringup', 'common.launch.py', common_args))
+    rviz = simulation if value('rviz') == 'auto' else value('rviz') == 'true'
+    if rviz:
+        actions.append(include('vehicle_description', 'rviz.launch.py', {
+            'use_sim_time': use_sim_time,
+            'fixed_frame': 'odom' if mode == 'manual' else 'map',
+        }))
+    return actions
 
 
 def generate_launch_description():
-    package_share = get_package_share_directory('vehicle_bringup')
-    safety_config = f'{package_share}/config/safety.yaml'
-
-    simulation_share = get_package_share_directory('vehicle_simulation')
-    world_argument = DeclareLaunchArgument(
-        'world',
-        default_value=f'{simulation_share}/worlds/evaluation.sdf',
-        description='Gazebo world file path',
-    )
-
-    world = LaunchConfiguration('world')
-
-    initial_mode = PythonExpression([
-        "'auto' if '",
-        LaunchConfiguration('mode'),
-        "' == 'navigation' else 'manual'",
+    choices = {
+        'backend': ('simulation', ['simulation', 'hardware']),
+        'mode': ('navigation', ['manual', 'mapping', 'navigation']),
+        'hardware_driver': ('real', ['real', 'mock']),
+        'use_sim_time': ('auto', ['auto', 'true', 'false']),
+        'rviz': ('auto', ['auto', 'true', 'false']),
+        'gazebo_gui': ('true', ['true', 'false']),
+        'headless_rendering': ('false', ['true', 'false']),
+    }
+    defaults = dict.fromkeys([
+        'world', 'map', 'safety_params_file', 'slam_params_file', 'amcl_params_file',
+        'nav2_params_file', 'controller_params_file', 'lidar_config_file',
+        'simulation_config_file',
+    ], '')
+    defaults.update({
+        'spawn_x': '-2.0', 'spawn_y': '0.0', 'spawn_z': '0.02',
+        'spawn_roll': '0.0', 'spawn_pitch': '0.0', 'spawn_yaw': '0.0',
+        'manager_odom_topic': 'odom',
+    })
+    return LaunchDescription([
+        *[DeclareLaunchArgument(name, default_value=default, choices=allowed)
+          for name, (default, allowed) in choices.items()],
+        *[DeclareLaunchArgument(name, default_value=default) for name, default in defaults.items()],
+        OpaqueFunction(function=configure),
     ])
-
-    command_guard = Node(
-        package = 'vehicle_control',
-        executable='command_guard',
-        parameters=[
-            LaunchConfiguration('safety_params_file'),
-            {'initial_mode': initial_mode, 'use_sim_time': True},
-        ],
-        output='screen',
-    )
-
-    description_share = get_package_share_directory('vehicle_description')
-    simulation = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            launch_file_path=f'{description_share}/launch/gazebo.launch.py',
-        ),
-        launch_arguments={
-            'world': world,
-            'safety_params_file': LaunchConfiguration('safety_params_file'),
-        }.items(),
-    )
-
-    visualization = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            launch_file_path=f'{description_share}/launch/rviz.launch.py'
-        ),
-        launch_arguments={
-            'fixed_frame': PythonExpression([
-                "'odom' if '", LaunchConfiguration('mode'), "' == 'manual' else 'map'",
-            ]),
-        }.items()
-    )
-
-    localization_share = get_package_share_directory('vehicle_localization')
-
-    mode_argument = DeclareLaunchArgument(
-        'mode',
-        default_value='navigation',
-        choices=['manual', 'mapping', 'navigation'],
-        description='Manual driving, mapping or navigation mode',
-    )
-
-    map_argument = DeclareLaunchArgument(
-        'map',
-        default_value=f'{localization_share}/maps/evaluation.yaml',
-        description='Saved map YAML file path',
-    )
-
-    slam_params_argument = DeclareLaunchArgument(
-        'slam_params_file',
-        default_value=f'{localization_share}/config/slam.yaml',
-        description='SLAM Toolbox parameter file',
-    )
-
-    planning_share = get_package_share_directory('vehicle_planning')
-    control_share = get_package_share_directory('vehicle_control')
-
-    safety_params_argument = DeclareLaunchArgument(
-        'safety_params_file',
-        default_value=safety_config,
-        description='Command guard parameter file',
-    )
-
-    amcl_params_argument = DeclareLaunchArgument(
-        'amcl_params_file',
-        default_value=f'{localization_share}/config/amcl.yaml',
-        description='AMCL parameter file',
-    )
-
-    nav2_params_argument = DeclareLaunchArgument(
-        'nav2_params_file',
-        default_value=f'{planning_share}/config/nav2.yaml',
-        description='Nav2 parameter file',
-    )
-
-    controller_params_argument = DeclareLaunchArgument(
-        'controller_params_file',
-        default_value=f'{control_share}/config/controller.yaml',
-        description='Controller parameter file',
-    )
-
-    localization = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            f'{localization_share}/launch/localization.launch.py'
-        ),
-        condition=LaunchConfigurationEquals('mode', 'navigation'),
-        launch_arguments={
-            'map': LaunchConfiguration('map'),
-            'amcl_params_file': LaunchConfiguration('amcl_params_file'),
-            'use_sim_time': 'true',
-        }.items(),
-    )
-
-    mapping = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            f'{localization_share}/launch/mapping.launch.py'
-        ),
-        condition=LaunchConfigurationEquals('mode', 'mapping'),
-        launch_arguments={
-            'slam_params_file': LaunchConfiguration('slam_params_file'),
-            'use_sim_time': 'true',
-        }.items(),
-    )
-
-    nav2 = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            f'{package_share}/launch/nav2.launch.py'
-        ),
-        condition=LaunchConfigurationEquals('mode', 'navigation'),
-        launch_arguments={
-            'nav2_params_file': LaunchConfiguration('nav2_params_file'),
-            'controller_params_file': LaunchConfiguration('controller_params_file'),
-            'autostart': 'true',
-        }.items(),
-    )
-
-    return LaunchDescription(
-        [
-            world_argument,
-            mode_argument,
-            map_argument,
-            slam_params_argument,
-            safety_params_argument,
-            amcl_params_argument,
-            nav2_params_argument,
-            controller_params_argument,
-            simulation,
-            visualization,
-            command_guard,
-            localization,
-            mapping,
-            nav2,
-        ]
-    )

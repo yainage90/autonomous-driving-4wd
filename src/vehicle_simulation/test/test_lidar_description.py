@@ -4,14 +4,15 @@ import xml.etree.ElementTree as ET
 
 import pytest
 import xacro
+from ament_index_python.packages import get_package_share_directory
 
 
 @pytest.fixture(scope='module')
 def robot():
-    package_dir = Path(__file__).resolve().parents[1]
+    package_dir = Path(get_package_share_directory('vehicle_description'))
     xacro_file = package_dir / 'urdf' / 'vehicle.urdf.xacro'
 
-    document = xacro.process_file(str(xacro_file))
+    document = xacro.process_file(str(xacro_file), mappings={'simulation': 'true'})
     return ET.fromstring(document.toxml())
 
 

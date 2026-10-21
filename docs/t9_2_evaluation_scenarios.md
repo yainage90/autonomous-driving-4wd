@@ -87,7 +87,7 @@ s01~s03 각 3회와 진행 판정 변경 후 s03 추가 3회의 기록을 확인
 | 같은 파일 | global/local `cost_scaling_factor` | `3.0` |
 | `vehicle_bringup/config/safety.yaml` | `command_timeout_sec` | `0.5` s |
 
-`vehicle_description/launch/gazebo.launch.py`는 스캔 전용 `scan_bridge`를
+`vehicle_simulation/launch/gazebo.launch.py`는 스캔 전용 `scan_bridge`를
 별도 프로세스로 실행한다. s08에서는 이 프로세스만 일시 정지한다.
 
 ## 정상 주행 평가: s01~s03

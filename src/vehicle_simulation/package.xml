@@ -13,6 +13,13 @@
 
   <exec_depend>rosbag2_py</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>vehicle_description</exec_depend>
+  <exec_depend>vehicle_actuator_sim</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
   <test_depend>std_srvs</test_depend>
@@ -22,6 +29,10 @@
   <test_depend>vehicle_control</test_depend>
   <test_depend>ros_gz_bridge</test_depend>
   <test_depend>xacro</test_depend>
+
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>geometry_msgs</test_depend>
+  <test_depend>tf2_ros_py</test_depend>
 
   <export><build_type>ament_python</build_type></export>
 </package>

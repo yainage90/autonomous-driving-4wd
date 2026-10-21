@@ -2,6 +2,9 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from vehicle_planning.launch_config import sim_time, timed_params
 from launch_ros.actions import Node
 
 
@@ -16,7 +19,7 @@ def generate_launch_description():
         executable='nav2_costmap_2d',
         namespace='global_costmap',
         name='global_costmap',
-        parameters=[str(params_file)],
+        parameters=[timed_params(LaunchConfiguration('nav2_params_file'), 'global_costmap.global_costmap', 'local_costmap.local_costmap'), {'use_sim_time': sim_time()}],
         output='screen',
     )
 
@@ -25,7 +28,7 @@ def generate_launch_description():
         executable='nav2_costmap_2d',
         namespace='local_costmap',
         name='local_costmap',
-        parameters=[str(params_file)],
+        parameters=[timed_params(LaunchConfiguration('nav2_params_file'), 'global_costmap.global_costmap', 'local_costmap.local_costmap'), {'use_sim_time': sim_time()}],
         output='screen',
     )
 
@@ -34,7 +37,7 @@ def generate_launch_description():
         executable='lifecycle_manager',
         name='lifecycle_manager_costmap',
         parameters=[{
-            'use_sim_time': True,
+            'use_sim_time': sim_time(),
             'autostart': True,
             'bond_timeout': 0.0,
             'node_names': [
@@ -46,6 +49,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('nav2_params_file', default_value=str(params_file)),
+        DeclareLaunchArgument('use_sim_time', default_value='true', choices=['true', 'false']),
         global_costmap,
         local_costmap,
         lifecycle_manager,
