@@ -118,10 +118,7 @@ ROS 테스트, 기존 명령 선택·목표 동기화 회귀를 분리한다. �
 
 ```bash
 source env.sh
-ROS_LOG_DIR=/tmp/watchdog-ros-log ROS_DOMAIN_ID=75 \
-RUN_ACTUATOR_WATCHDOG_INTEGRATION=1 \
-ACTUATOR_WATCHDOG_REPORT=evaluation_runs/watchdog/report.json \
-python -m pytest src/vehicle_simulation/test/test_actuator_watchdog.py -q -s
+python3 -c "import os, pytest; os.environ.update(ROS_LOG_DIR='/tmp/watchdog-ros-log', ROS_DOMAIN_ID='75', RUN_ACTUATOR_WATCHDOG_INTEGRATION='1'); raise SystemExit(pytest.main(['src/vehicle_simulation/test/test_actuator_watchdog.py', '-q', '-s']))"
 ```
 
 검증 항목은 입력 생산자 중단, guard `SIGINT`/`SIGKILL`/`SIGSTOP`, 짧고 긴 pause,
@@ -134,24 +131,6 @@ python -m pytest src/vehicle_simulation/test/test_actuator_watchdog.py -q -s
 연속 1초 확인한다. `observed_stop_sec`와 이동 거리는 ground truth 수신 표본에
 따른 관측값이며 전송 지연과 표본 간격을 포함한다. 실차 제동 거리로 해석하지 않는다.
 
-2026-10-20 검증에서 guard 장애·명령 채널 중단의 만료 및 0 출력 적용은
-마지막 유효 수신 후 0.300~0.301초, 실제 정지 관측은 0.318~0.335초였다.
-0.1 m/s 입력에서 관측 이동 거리는 약 0.029~0.030 m였다.
-입력 생산자 중단은 guard가 약 0.54~0.55초 후 0 출력을 적용했다.
-시뮬레이터 0.8초 정지는 재개 첫 업데이트에 0 출력을 적용했고,
-마지막 유효 수신부터 약 0.819초로 별도 기록했다.
-구동기 재시작 중 이전 세션 재전송과 현재 세대 NaN 명령의 실제 정지 출력도 확인했다.
-원본 요약은 `evaluation_runs/watchdog/report.json`, 시험 로그는 pytest 임시 디렉터리에 있다.
-
-전체 워크스페이스 빌드와 일반 Python/ROS 시험 171개·수신기 C++ 시험 9개가 통과했다.
-외부 시스템이 필요한 기본 skip은 11개이며, 별도 Gazebo watchdog·Gazebo/Nav2
-통합 시험 각 1개도 통과했다. 전체 `colcon test`의 `vehicle_drivers`,
-`vehicle_perception`은 기존 빈 패키지로 시험이 없어 exit 5를 반환한다.
-테스트가 있는 패키지는 `--packages-skip vehicle_drivers vehicle_perception`으로 확인한다.
-
-Gazebo/Nav2 회귀에서는 수동 전환·비상정지 후 각각 1.307초·1.082초에 이전 목표 종료와
-정지를 확인하고 3초 정지를 유지했다. 새 목표의 재출발·정상 취소·정상 성공도 확인했다.
-요약은 `evaluation_runs/watchdog/navigation_sync_result.json`에 보관한다.
 기존 `test_safety_navigation_sync.py`는 새 evaluation 시스템의 노드·서비스가 모두 준비된
 후 `RUN_SAFETY_SYNC_INTEGRATION=1`로 실행한다. 구동기 watchdog 시험과 달리 이 시험은
 시스템을 직접 시작하지 않는다.

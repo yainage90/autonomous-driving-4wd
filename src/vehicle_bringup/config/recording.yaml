@@ -1,0 +1,24 @@
+# Explicit topic selection; absent publishers may appear later through discovery.
+max_cache_size: 16777216
+common_topics:
+  - /scan
+  - /odom
+  - /tf
+  - /tf_static
+  - /joint_states
+  - /map
+  - /cmd_vel_manual
+  - /cmd_vel_auto
+  - /cmd_vel
+  - /actuator/command
+  - /actuator/status
+  - /control_state
+  - /navigation_allowed
+  - /navigation_permission
+  - /navigation_command
+  - /navigation_manager/events
+  - /navigation_manager/recovery_status
+  - /rosout
+simulation_topics:
+  - /clock
+  - /ground_truth/odom
