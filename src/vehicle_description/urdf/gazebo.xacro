@@ -2,6 +2,10 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:arg name="safety_config_file"
     default="$(find vehicle_actuator_sim)/config/safety.yaml" />
+  <xacro:arg name="simulation_config_file"
+    default="$(find vehicle_simulation)/config/simulation.yaml"/>
+  <xacro:property name="wheel_separation_multiplier"
+    value="${xacro.load_yaml('$(arg simulation_config_file)')['simulation']['wheel_separation_multiplier']}"/>
   <gazebo>
     <plugin filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
@@ -51,7 +55,7 @@
   <!-- 시뮬레이션 라이다의 초기 측정 설정 -->
   <xacro:arg
     name="lidar_config_file"
-    default="${xacro.abs_filename('../config/lidar.yaml')}" />
+    default="$(find vehicle_simulation)/config/lidar.yaml" />
   <xacro:property
     name="lidar_config"
     value="${xacro.load_yaml('$(arg lidar_config_file)')['lidar']}" />

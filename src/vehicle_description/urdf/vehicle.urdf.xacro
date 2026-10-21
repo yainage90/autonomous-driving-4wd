@@ -13,9 +13,7 @@
     name="wheel_separation"
     value="${vehicle_config['geometry']['wheel_separation_m']}"/>
 
-  <xacro:property
-    name="wheel_separation_multiplier"
-    value="${vehicle_config['calibration']['wheel_separation_multiplier']}"/>
+  <xacro:arg name="simulation" default="false"/>
   <xacro:property name="wheelbase" value="0.0994"/>
   <xacro:property name="chassis_center_x" value="-0.006"/>
   <xacro:property name="lower_plate_z" value="0.02565"/>
@@ -27,7 +25,9 @@
   <xacro:include filename="standoff.xacro"/>
   <xacro:include filename="sensors.xacro"/>
   <xacro:include filename="boards.xacro"/>
-  <xacro:include filename="gazebo.xacro"/>
+  <xacro:if value="$(arg simulation)">
+    <xacro:include filename="gazebo.xacro"/>
+  </xacro:if>
 
   <!-- 바닥 접지면에 놓이는 기준 좌표계 -->
   <link name="base_footprint"/>

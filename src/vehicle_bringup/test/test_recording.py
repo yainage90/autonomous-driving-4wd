@@ -84,6 +84,10 @@ def test_recording_output_directory(tmp_path, monkeypatch, explicit_path):
         assert run_dir.name.startswith('run_')
 
     metadata = json.loads((run_dir / 'run.json').read_text(encoding='utf-8'))
+    assert metadata['backend'] == 'simulation'
+    assert 'backend:=simulation' in metadata['launch_command']
+    for argument in ('lidar_config_file', 'simulation_config_file'):
+        assert any(item.startswith(argument + ':=') for item in metadata['launch_command'])
     command = metadata['bag_command']
     assert command[command.index('-o') + 1] == str(run_dir / 'bag')
     assert str(run_dir / 'inputs' / 'src') in (

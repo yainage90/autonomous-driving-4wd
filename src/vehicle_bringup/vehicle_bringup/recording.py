@@ -111,6 +111,8 @@ def main():
 
     inputs = {
         'world': 'vehicle_simulation/worlds/evaluation.sdf',
+        'lidar_config_file': 'vehicle_simulation/config/lidar.yaml',
+        'simulation_config_file': 'vehicle_simulation/config/simulation.yaml',
         'map': 'vehicle_localization/maps/evaluation.yaml',
         'safety_params_file': 'vehicle_bringup/config/safety.yaml',
         'amcl_params_file': 'vehicle_localization/config/amcl.yaml',
@@ -120,6 +122,7 @@ def main():
     launch_command = [
         'ros2', 'launch', 'vehicle_bringup', 'system.launch.py',
         f'mode:={args.mode}',
+        'backend:=simulation',
     ]
     launch_command.extend(
         f'{name}:={source / relative}'
@@ -138,6 +141,7 @@ def main():
     metadata = {
         'schema_version': 1,
         'scenario': args.scenario,
+        'backend': 'simulation',
         'mode': args.mode,
         'planned_goal_map': args.goal,
         'expected_start_map': args.start_map,

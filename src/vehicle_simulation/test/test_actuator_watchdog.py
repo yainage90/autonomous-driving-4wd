@@ -16,6 +16,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_srvs.srv import SetBool
 from vehicle_interfaces.msg import ActuatorCommand, ActuatorStatus, ControlState
+from vehicle_simulation.process_cleanup import cleanup_partition, stop_gazebo
 
 
 @pytest.mark.skipif(os.environ.get('RUN_ACTUATOR_WATCHDOG_INTEGRATION') != '1',
@@ -29,7 +30,7 @@ def test_receiver_stops_independently_and_requires_explicit_activation(tmp_path)
     # Avoid touching the user's GUI, home config, or running Gazebo transport partition.
     env['GZ_HOMEDIR'] = str(tmp_path / 'gz_home')
     description = Path(get_package_share_directory('vehicle_description'))
-    urdf = subprocess.check_output(['xacro', str(description / 'urdf/vehicle.urdf.xacro')],
+    urdf = subprocess.check_output(['xacro', str(description / 'urdf/vehicle.urdf.xacro'), 'simulation:=true'],
                                    env=env, text=True)
     urdf_path = tmp_path / 'vehicle.urdf'
     urdf_path.write_text(urdf)
@@ -257,8 +258,11 @@ def test_receiver_stops_independently_and_requires_explicit_activation(tmp_path)
 
         # Reboot the simulated receiver while the PC keeps producing commands.
         old_session = statuses[-1].actuator_session
-        os.killpg(sim.pid, signal.SIGINT)
+        stop_gazebo(env['GZ_PARTITION'], env)
+        if sim.poll() is None:
+            os.killpg(sim.pid, signal.SIGINT)
         sim.wait(timeout=8)
+        cleanup_partition(env['GZ_PARTITION'], command_names={'ruby'})
         observe(.3)
         sim = start(['gz', 'sim', '-s', '-r', str(world_path)], 'gazebo_restarted')
         old_timer = node.create_timer(.02, lambda: raw.publish(replay))
@@ -277,6 +281,7 @@ def test_receiver_stops_independently_and_requires_explicit_activation(tmp_path)
         print(json.dumps(report, indent=2), flush=True)
     finally:
         producer.cancel()
+        stop_gazebo(env['GZ_PARTITION'], env)
         for proc in reversed(processes):
             if proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGCONT)
@@ -287,6 +292,7 @@ def test_receiver_stops_independently_and_requires_explicit_activation(tmp_path)
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait(timeout=5)
+        cleanup_partition(env['GZ_PARTITION'])
         for log in logs:
             log.close()
         node.destroy_node()
