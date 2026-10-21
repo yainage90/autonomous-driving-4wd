@@ -13,17 +13,66 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from vehicle_interfaces.srv import SetNavigationGoal
-from vehicle_simulation.evaluate_run import (
-    odometry_pose,
-    pose_error,
-    stamp_ns,
-)
 
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('RUN_NAVIGATION_INTEGRATION') != '1',
     reason='새로 시작한 evaluation navigation 시스템이 필요합니다.',
 )
+
+
+def pose_error(
+    actual: tuple[float, float, float],
+    goal: tuple[float, float, float],
+) -> tuple[float, float]:
+    if not all(math.isfinite(v) for v in (*actual, *goal)):
+        raise ValueError('Actual and goal poses must be finite')
+
+    position_error = math.hypot(
+        actual[0] - goal[0],
+        actual[1] - goal[1],
+    )
+    yaw_difference = actual[2] - goal[2]
+    yaw_error = abs(math.atan2(
+        math.sin(yaw_difference),
+        math.cos(yaw_difference),
+    ))
+    return position_error, yaw_error
+
+
+def stamp_ns(sample: Odometry) -> int:
+    stamp = sample.header.stamp
+    return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+
+def odometry_pose(sample: Odometry) -> tuple[float, float, float]:
+    if (
+        sample.header.frame_id != 'world'
+        or sample.child_frame_id != 'base_footprint'
+    ):
+        raise ValueError('Expected world -> base_footprint ground truth')
+
+    pose = sample.pose.pose
+    q = pose.orientation
+    values = (
+        pose.position.x, pose.position.y,
+        q.x, q.y, q.z, q.w,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError('Ground-truth pose must be finite')
+
+    norm = math.hypot(q.x, q.y, q.z, q.w)
+    if not math.isclose(norm, 1.0, rel_tol=0.0, abs_tol=1e-3):
+        raise ValueError('Expected a unit quaternion')
+
+    qx, qy, qz, qw = (
+        q.x / norm, q.y / norm, q.z / norm, q.w / norm,
+    )
+    yaw = math.atan2(
+        2.0 * (qw * qz + qx * qy),
+        1.0 - 2.0 * (qy * qy + qz * qz),
+    )
+    return pose.position.x, pose.position.y, yaw
 
 
 def wait_until(node, condition, timeout_sec):

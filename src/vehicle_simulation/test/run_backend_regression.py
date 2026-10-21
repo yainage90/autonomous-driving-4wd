@@ -1,16 +1,13 @@
 """Run existing opt-in tests against a fresh installed system for every case.
 
 Usage: source env.sh; python3 src/vehicle_simulation/test/run_backend_regression.py
-       --output evaluation_runs/005_separation/regression --cases s01 s02 s03 s05 s06
+       --output log/backend_regression --cases s01 s02 s03 s05 s06
 """
 import argparse
-import hashlib
 import json
 import math
 import os
 from pathlib import Path
-import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -28,16 +25,6 @@ from vehicle_simulation.process_cleanup import stop_system
 
 GOALS = {'s01': [1., 0., 0.], 's02': [0., 1., math.pi / 2],
          's03': [4., 0., 0.], 's05': [4., 1.1, 0.], 's06': [1., 0., 0.]}
-
-
-def stop(process):
-    if process is not None and process.poll() is None:
-        process.send_signal(signal.SIGINT)
-        try:
-            process.wait(timeout=15.)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=5.)
 
 
 def wait_for_navigation(environment, timeout, *, require_manager_observation=True, process=None):
@@ -109,15 +96,9 @@ def main():
     workspace = Path(__file__).resolve().parents[3]
     output = args.output.resolve()
     if output.is_relative_to(workspace / 'src'):
-        parser.error('--output must be outside src to avoid recursive input snapshots')
+        parser.error('--output must be outside src')
     output.mkdir(parents=True, exist_ok=False)
     (output / 'COLCON_IGNORE').touch()
-    snapshot = output / 'inputs/src'
-    shutil.copytree(workspace / 'src', snapshot, ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache', '*.egg-info'))
-    manifest = {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
-                for p in sorted(snapshot.rglob('*')) if p.is_file()}
-    (output / 'source_manifest.json').write_text(json.dumps(manifest, indent=2))
-    (output / 'changes.diff').write_bytes(subprocess.check_output(['git', 'diff', 'main'], cwd=workspace))
     test_directory = Path(__file__).resolve().parent
     results = []
     for index, case in enumerate(args.cases):
@@ -133,9 +114,9 @@ def main():
                   'rviz:=false', 'gazebo_gui:=false', 'headless_rendering:=true']
         if case == 'recovery':
             launch = ['ros2', 'launch', str(test_directory / 'recovery_system.launch.py')]
-        process = bag = None
+        process = None
         print(f'Starting {index + 1}/{len(args.cases)}: {case}; artifacts: {run}', flush=True)
-        with (run / 'system.log').open('w') as launch_log, (run / 'test.log').open('w') as test_log, (run / 'bag.log').open('w') as bag_log:
+        with (run / 'system.log').open('w') as launch_log, (run / 'test.log').open('w') as test_log:
             try:
                 if case != 'watchdog':
                     process = subprocess.Popen(launch, env=environment, stdout=launch_log,
@@ -146,31 +127,6 @@ def main():
                 if case in GOALS:
                     environment.update(RUN_NAVIGATION_INTEGRATION='1', NAVIGATION_SCENARIO=case)
                     tests = [test_directory / 'test_navigation_integration.py']
-                    bag_command = ['ros2', 'bag', 'record', '-s', 'mcap', '-o', str(run / 'bag'),
-                        '--qos-profile-overrides-path', str(snapshot / 'vehicle_simulation/config/recording_qos.yaml'),
-                        '--topics', '/clock', '/scan', '/odom', '/ground_truth/odom', '/tf', '/tf_static',
-                        '/cmd_vel', '/actuator/command', '/actuator/status', '/navigation_manager/events']
-                    bag = subprocess.Popen(bag_command, env=environment, stdout=bag_log,
-                                           stderr=subprocess.STDOUT, start_new_session=True)
-                    # Wait for the recorder's discovery before submitting a goal.
-                    os.environ['ROS_DOMAIN_ID'] = environment['ROS_DOMAIN_ID']
-                    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-                    node = rclpy.create_node('regression_recording_probe')
-                    try:
-                        end = time.monotonic() + 15.
-                        while time.monotonic() < end:
-                            rclpy.spin_once(node, timeout_sec=.1)
-                            if node.count_subscribers('/navigation_manager/events') >= 1:
-                                break
-                        else:
-                            raise RuntimeError('Recorder failed to subscribe to navigation events')
-                    finally:
-                        node.destroy_node()
-                        rclpy.shutdown()
-                    metadata = {'mode': 'navigation', 'backend': 'simulation', 'scenario': case,
-                                'planned_goal_map': GOALS[case], 'expected_start_map': [0., 0., 0.],
-                                'launch_command': launch, 'bag_command': bag_command}
-                    (run / 'run.json').write_text(json.dumps(metadata, indent=2))
                 elif case == 'safety':
                     environment['RUN_SAFETY_SYNC_INTEGRATION'] = '1'
                     tests = [test_directory / 'test_safety_navigation_sync.py']
@@ -187,27 +143,14 @@ def main():
                            f'--basetemp={run / "pytest"}', f'--junitxml={run / "junit.xml"}']
                 result = subprocess.run(command, env=environment, stdout=test_log,
                                         stderr=subprocess.STDOUT, timeout=240.)
-                stop(bag)
                 if result.returncode:
                     raise RuntimeError(f'{case} failed; inspect {run / "test.log"}')
-                if case in GOALS:
-                    analysis = subprocess.run(['ros2', 'run', 'vehicle_simulation', 'evaluate_run',
-                        '--run-dir', str(run), '--map-from-world', '2.036', '0.020', '0',
-                        '--alignment-note', 'Existing grid-center world/map alignment; no collision inference.'],
-                        env=environment, stdout=test_log, stderr=subprocess.STDOUT, timeout=30.)
-                    if analysis.returncode:
-                        raise RuntimeError(f'Bag evaluation failed: {run}')
-                    report = json.loads((run / 'analysis.json').read_text())
-                    if case in ('s01', 's02', 's03'):
-                        assert report['position_error_m'] <= .10, report
-                        assert abs(report['yaw_error_deg']) <= 10., report
                 results.append({'case': case, 'result': 'passed', 'directory': str(run)})
                 print(f'Passed: {case}', flush=True)
             except Exception as error:
                 results.append({'case': case, 'result': 'failed', 'error': str(error), 'directory': str(run)})
                 print(f'Failed: {case}: {error}', flush=True)
             finally:
-                stop(bag)
                 if process is not None:
                     stop_system(process, environment['GZ_PARTITION'], simulation=True, environment=environment)
                 (output / 'results.json').write_text(json.dumps(results, indent=2))

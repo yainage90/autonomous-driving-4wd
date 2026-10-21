@@ -14,11 +14,6 @@ setup(
     ],
     install_requires=['setuptools'],
     tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'evaluate_run = vehicle_simulation.evaluate_run:main',
-        ],
-    },
     zip_safe=True,
     maintainer='vehicle_team',
     maintainer_email='maintainer@example.com',

@@ -2,7 +2,7 @@
 
 ## 목적과 검증 범위
 
-기존 명령 보호·목표 관리·분석 테스트를 재사용하고, 액션 결과 수신부터
+명령 보호·목표 관리 테스트를 사용하고, 액션 결과 수신부터
 실제 정지까지의 상태 전이와 고정 월드의 대표 주행 검증을 보강했다.
 
 - 명령 제한, 타임아웃, 비상정지 우선순위.
@@ -10,13 +10,9 @@
 - evaluation 월드에서 직선·회전·우회 목표의 반복 실행.
 - 센서 복구 후 자동 재출발 방지 등 기존 방어 동작 유지.
 
-시나리오와 전체 판정 기준은 [T9.2](t9_2_evaluation_scenarios.md),
-관측 자료 기록·분석은 [T9.3](t9_3_observation_recording.md)를 따른다.
-주행 통합 테스트의 자동 판정 범위는 액션 결과·상태 전이·Gazebo 속도 기반 정지다.
-실제 도착 위치·방향 오차와 충돌 여부는 별도 확인 항목이다.
-이후 위치 합격 기준을 0.10 m로 확정하고 수행한 도착 평가 9회,
-진행 판정 변경 후 s03 추가 3회의 bag 분석·사용자 관찰은
-[1차 시뮬레이션 검증 결과](simulation_validation.md)에 정리했다.
+시나리오는 [T9.2](t9_2_evaluation_scenarios.md)를 따른다.
+자동 판정은 액션 결과·상태 전이·Gazebo 속도 기반 정지이며,
+도착 위치·방향 오차와 충돌 여부는 별도 확인이 필요하다.
 
 ## 실행 조건
 
@@ -30,11 +26,6 @@
 - 매 주행 시험 전 시스템을 종료하고 새로 시작한다.
 - 지도·스캔 정합, Nav2 활성화, `navigation_manager`의 `waiting` 상태를 확인한다.
 - 다른 조종 도구에서 목표나 속도 명령을 보내지 않는다.
-
-pytest 9.1.1에서는 설치된 launch_testing 3.4.11의
-`pytest_pycollect_makemodule(path, parent)` 플러그인 검증이 실패했다.
-pytest 7.4.4 고정 후 가상환경에서 정상 수집·실행을 확인했다.
-colcon은 `/usr/bin/python3`와 시스템 pytest 7.4.4를 사용한 것을 로그로 확인했다.
 
 ## 패키지 테스트
 
@@ -56,18 +47,6 @@ colcon test-result --test-result-base build/vehicle_planning --verbose
 colcon test-result --test-result-base build/vehicle_simulation --verbose
 ```
 
-2026-10-20 사용자 실행 결과와 `build/<패키지>/pytest.xml`에서 확인한 결과다.
-문서 작성 과정에서 테스트를 새로 실행하지는 않았다.
-
-| 패키지 | 테스트 | 오류 | 실패 | skip |
-|---|---:|---:|---:|---:|
-| vehicle_control | 52 | 0 | 0 | 0 |
-| vehicle_planning | 78 | 0 | 0 | 0 |
-| vehicle_simulation | 9 | 0 | 0 | 1 |
-
-vehicle_simulation의 skip 1개는 명시적 활성화가 필요한 주행 통합 테스트다.
-이 skip을 주행 통과로 계산하지 않으며, 아래의 실제 주행 실행 결과와 구분한다.
-
 ## 주행 통합 테스트
 
 ### 실행 절차
@@ -84,17 +63,11 @@ ros2 launch vehicle_bringup system.launch.py mode:=navigation
 
 ```bash
 source env.sh
-mkdir -p evaluation_runs/t9_4
-RUN_NAVIGATION_INTEGRATION=1 NAVIGATION_SCENARIO=s01 \
-  python -m pytest \
-  src/vehicle_simulation/test/test_navigation_integration.py \
-  -v -s \
-  --junitxml=evaluation_runs/t9_4/s01_next.xml
+python3 -c "import os, pytest; os.environ.update(RUN_NAVIGATION_INTEGRATION='1', NAVIGATION_SCENARIO='s01'); raise SystemExit(pytest.main(['src/vehicle_simulation/test/test_navigation_integration.py', '-v', '-s']))"
 ```
 
 `NAVIGATION_SCENARIO`는 `s01`, `s02`, `s03`, `s05`, `s06`을 지원한다.
-한 번에 하나만 실행하며, XML은 실행별 새 파일명으로 보관한다.
-설정·코드를 변경한 뒤의 결과는 이전 실행과 구분한다.
+한 번에 하나만 실행한다.
 
 테스트 종료 시 fixture가 비상정지를 요청한다.
 다음 시험은 터미널 A의 시스템 종료·재시작부터 수행하여
@@ -128,27 +101,6 @@ RUN_NAVIGATION_INTEGRATION=1 NAVIGATION_SCENARIO=s01 \
 판정하며, 최종 상태 이후의 독립 정지 확인은 남은 시간 안에서 최대 5초 기다린다.
 서비스의 `success=true`만으로 주행 성공·취소 완료를 판정하지 않는다.
 
-### 실행 결과
-
-2026-10-20 사용자 실행 콘솔과 보관된 JUnit XML로 확인했다.
-
-| 시나리오 | 목표 map (x, y, yaw) [m, m, rad] | 기대 결과 | 통과 횟수 |
-|---|---|---|---:|
-| s01 직선 | (1, 0, 0) | succeeded 및 실제 정지 | 3/3 |
-| s02 회전 | (0, 1, π/2) | succeeded 및 실제 정지 | 3/3 |
-| s03 정적 장애물 우회 목표 | (4, 0, 0) | succeeded 및 실제 정지 | 3/3 |
-| s05 도달 불가능한 목표 | (4, 1.1, 0) | failed 및 실제 정지 | 1/1 |
-| s06 주행 중 취소 | (1, 0, 0) | canceled 및 실제 정지 | 1/1 |
-
-s05는 현재 지도에서 미관측 목표 거부를 포함하는 실패 시나리오다.
-빈 공간 목표까지의 경로 단절만을 검증한 결과로 취급하지 않는다.
-s03의 자동 검증은 결과·상태·정지이며 우회 궤적과 접촉 여부를 판정하지 않는다.
-
-s01~s03의 2·3회차 XML 6개는 `evaluation_runs/t9_4/s01_r2.xml`부터
-`s03_r3.xml`까지 보관되어 있으며 각각 1 test, 오류·실패·skip 0개를 확인했다.
-각 1회차와 s05·s06은 사용자가 제공한 실행 콘솔로 통과를 확인했다.
-콘솔의 pytest 전체 실행 시간은 목표까지의 주행 소요 시간과 구분한다.
-
 ## 기존 검증 재사용과 실패 추적
 
 | 검증 대상 | 대표 테스트 |
@@ -159,7 +111,6 @@ s01~s03의 2·3회차 XML 6개는 `evaluation_runs/t9_4/s01_r2.xml`부터
 | 데이터 복구 후 주행 차단 유지 | `test_safety_fault_keeps_motion_blocked_after_data_recovers` |
 | 오류 후 늦은 목표 수락 처리 | `test_late_acceptance_after_fault_waits_for_result_and_stop` |
 | 스캔 중단 시 자율 명령 차단 | `test_scan_loss_stops_auto_commands_and_stays_stopped` |
-| 취소 액션과 최종 실패 상태 구분 | `test_summary_preserves_canceled_action_and_failed_final_state` |
 
 이번에 추가한 `test_result_waits_for_stop_before_terminal_state`는
 성공·실패·취소 모두 정지 확인 전에는 최종 상태로 전환하지 않는지 확인한다.
@@ -176,24 +127,7 @@ s01~s03의 2·3회차 XML 6개는 `evaluation_runs/t9_4/s01_r2.xml`부터
 이벤트 JSON은 테스트 성공·실패 시 pytest 임시 디렉터리에 생성되고 경로가 출력된다.
 임시 자료는 이후 pytest 실행에서 정리될 수 있으므로 장기 보관할 자료는
 출력된 경로에서 별도 복사한다. JUnit XML만으로 센서·TF 자료가 보관되지는 않는다.
-관련 자료가 필요한 문제는 T9.3의 bag 기록을 함께 사용한다.
 
 실제 오류가 재현되면 원인에 해당하는 기존 테스트를 보강하거나 최소 회귀 케이스를
 추가하고, 재현 조건·수정 내용·검증 결과를 기록한다.
 위 테스트 목록을 모두 이번에 발생한 오류의 이력으로 해석하지 않는다.
-
-## 당시 T9.4 실행 범위와 후속 확인
-
-- 실제 map 기준 도착 위치·방향 오차는 이번 주행 테스트에서 판정하지 않았다.
-- 이후 [world→map 형상 정합](t9_3_world_map_alignment.md)을 수행해
-  셀 중심 기준 `(2.036, 0.020, 0)`의 관계를 확인했다. 물리적 정합의 불확실성은 포함한다.
-- 충돌 자동 검출은 없으며 이번 실행의 접촉 여부는 미확인이다.
-  T9.2의 이전 수동 평가에서 확인한 결과와 구분한다.
-- s04·s07·s08의 Gazebo 시나리오는 이번에 새로 반복하지 않았다.
-- 취소 후 실제 정지는 확인했으며 잔여 속도 명령의 해제는 이 주행 테스트가
-  직접 구독·판정하지 않는다. 관련 명령 보호 테스트와 bag 관측으로 구분해 확인한다.
-
-이 결과는 T9.4의 핵심 자동 검증과 대표 시나리오 회귀 검증 범위를 기록한 것이다.
-이슈 #3 전체의 도착 정확도·충돌 등 모든 성능 기준을 충족했다는 판정과는 구분한다.
-후속 도착 평가·무접촉 확인과 마무리 지연 개선 결과까지 합친 현재 완료 정리는
-[검증 요약](simulation_validation.md)을 참고한다.

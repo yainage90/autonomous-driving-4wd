@@ -1,6 +1,6 @@
 # 내비게이션 오류 후 명시적 복구
 
-이슈 [004](../issues/004_navigation_fault_recovery.md)의 복구 서비스는 동일 manager가
+복구 서비스는 동일 manager가
 이전 액션 종료를 확인할 수 있는 경우에 한해 노드 재시작 없이 준비 상태로 복귀한다.
 복구 완료만으로 움직이지 않으며, 별도의 새 목표가 필요하다.
 
@@ -72,10 +72,9 @@ manager 재시작의 `navigation_reset_required`도 서비스로 지우지 않�
 
 ## 기록과 검증
 
-기록기에 `/navigation_manager/recovery_status`를 포함한다.
-이벤트 스키마 버전 1은 유지하고 `recovery_required`, `recovery_started`,
-`recovery_failed`, `recovery_completed`를 추가한다. 평가기는 복구 완료를
-주행 성공으로 분류하지 않는다. 단일 시도 평가에 주행 최종 상태가 없으면 기존처럼 거부한다.
+`/navigation_manager/recovery_status`에서 복구 상태를 확인한다.
+이벤트 스키마 버전 1의 `recovery_required`, `recovery_started`,
+`recovery_failed`, `recovery_completed`로 복구 진행을 관측한다.
 
 단위 시험은 `vehicle_planning/test/test_navigation_recovery.py`, 실제 ROS 서비스·액션 시험은
 `test_navigation_recovery_integration.py`에 있다. Gazebo 시험은 별도 ROS domain에서
@@ -101,23 +100,3 @@ python3 -c "import os, pytest; os.environ['RUN_RECOVERY_GAZEBO']='1'; raise Syst
 테스트 중계 토픽으로 연결한다. 시험이 액션 종료 후 중계를 차단하여 실제 5초 정지 타임아웃을
 만들고, 데이터 복귀·명시적 복구·정지 유지·새 목표 성공을 검증한다.
 시험 종료 후 launch도 종료하여 다음 시험에 목표·비상정지 상태를 남기지 않는다.
-
-### 2026-10-20 검증 결과
-
-| 검증 | 결과 |
-|---|---|
-| 변경 관련 패키지 시험 | 5개 패키지 빌드·테스트 통과, 옵트인 Gazebo 시험은 별도 실행 |
-| 복구 단위 시험 | 26개 통과: 시간 경계·신선도·중복 요청·대상 취소·결과 재조회·이전 콜백 격리 |
-| 실제 ROS 서비스·액션 시험 | 2개 통과: 정지 타임아웃 후 새 목표, 늦은 수락 후 명시적 복구·durable 상태 조회 |
-| Gazebo 복구 시나리오 | 통과: 실제 5초 정지 타임아웃 → 데이터 복귀 후에도 차단 → recover → 정지 유지 → 새 목표 성공 |
-| 기존 Gazebo 안전 전환 | 통과: 수동 전환·비상정지 후 실패·3초 정지 유지, 새 목표 취소·정상 성공 |
-| 기존 Gazebo 독립 watchdog | 단독 재실행 통과 |
-
-Gazebo 복구 시험의 보고 값은 `fault: Vehicle stop was not confirmed within 5.0 s`,
-`recovered_stationary_without_goal: true`, `new_goal: succeeded`였다.
-시험 코드는 [복구 단위 시험](../src/vehicle_planning/test/test_navigation_recovery.py),
-[ROS 통합 시험](../src/vehicle_planning/test/test_navigation_recovery_integration.py),
-[Gazebo 복구 시험](../src/vehicle_simulation/test/test_navigation_recovery_gazebo.py)에 있다.
-기존 watchdog 시험의 첫 병행 실행은 구동기 재활성화 단계에서
-`Fresh actuator state was not received`로 실패했고, 다른 Gazebo 시험 종료 후 단독 재실행은
-37.91초에 통과했다. 이번 변경은 구동기·guard 구현을 수정하지 않는다.

@@ -25,7 +25,4 @@ dist/
 
 scratch/
 
-# Local evaluation recordings and input snapshots
-/evaluation_runs/
-
 /issues/

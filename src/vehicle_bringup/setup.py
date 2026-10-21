@@ -15,11 +15,6 @@ setup(
     ],
     install_requires=['setuptools'],
     tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'record_run = vehicle_bringup.recording:main',
-        ],
-    },
     zip_safe=True,
     maintainer='vehicle_team',
     maintainer_email='maintainer@example.com',

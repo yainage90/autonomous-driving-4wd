@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.utilities import perform_substitutions
 import pytest
 import yaml
 
@@ -71,6 +72,69 @@ def test_missing_configuration_fails_before_process_creation(tmp_path):
                           safety_params_file=str(tmp_path / 'missing.yaml'))
     with pytest.raises(ValueError, match='safety_params_file file does not exist'):
         module.configure(context)
+
+
+def test_recording_disabled_does_not_read_config_or_create_directory(tmp_path):
+    module = system()
+    output = tmp_path / 'unused' / 'bag'
+    context = context_for(module, record_dir=str(output), record_duration_sec='invalid')
+    with patch.object(module, 'share', side_effect=AssertionError('Recording config lookup')):
+        assert module.recording_actions(context, simulation=True) == []
+    assert not output.parent.exists()
+
+
+@pytest.mark.parametrize('backend', ['simulation', 'hardware'])
+def test_recording_command_and_backend_isolation(tmp_path, backend):
+    module = system()
+    output = tmp_path / 'recordings with spaces' / 'bag'
+    context = context_for(module, record='true', backend=backend, hardware_driver='mock',
+                          mode='manual', rviz='false', record_dir=str(output))
+    def lookup(name):
+        if backend == 'hardware':
+            assert name not in ('vehicle_simulation', 'vehicle_actuator_sim', 'ros_gz_sim')
+        return get_package_share_directory(name)
+    with patch.object(module, 'share', lookup):
+        actions = module.configure(context)
+    recorder, = [action for action in actions if isinstance(action, ExecuteProcess)]
+    command = [perform_substitutions(context, part) for part in recorder.cmd]
+    assert command[:5] == ['ros2', 'bag', 'record', '-s', 'mcap']
+    assert command[command.index('-o') + 1] == str(output)
+    assert command[command.index('--max-bag-size') + 1] == '268435456'
+    assert command[command.index('--max-cache-size') + 1] == '16777216'
+    assert '--use-sim-time' not in command and '--no-discovery' not in command
+    assert '-a' not in command and '--disable-keyboard-controls' in command
+    assert ('/clock' in command) is (backend == 'simulation')
+    assert ('/ground_truth/odom' in command) is (backend == 'simulation')
+    assert '/scan' in command and '/tf_static' in command
+    assert output.parent.is_dir() and not output.exists()
+
+
+@pytest.mark.parametrize('argument,value', [
+    ('record_duration_sec', 'nan'), ('record_duration_sec', 'inf'),
+    ('record_duration_sec', '0'), ('record_duration_sec', '-1'),
+    ('record_max_bag_size', '0'), ('record_max_bag_size', '-1'),
+    ('record_max_bag_size', '1.5'),
+])
+def test_invalid_recording_limits_have_no_filesystem_side_effect(tmp_path, argument, value):
+    module = system()
+    output = tmp_path / 'new' / 'bag'
+    context = context_for(module, record='true', record_dir=str(output), **{argument: value})
+    with pytest.raises(ValueError):
+        module.recording_actions(context, simulation=True)
+    assert not output.parent.exists()
+
+
+def test_recording_rejects_reused_directory_and_file_parent(tmp_path):
+    module = system()
+    marker = tmp_path / 'keep.txt'
+    marker.write_text('preserve')
+    context = context_for(module, record='true', record_dir=str(tmp_path))
+    with pytest.raises(ValueError, match='already exists'):
+        module.recording_actions(context, simulation=True)
+    assert marker.read_text() == 'preserve'
+    context.launch_configurations['record_dir'] = str(marker / 'bag')
+    with pytest.raises(OSError):
+        module.recording_actions(context, simulation=True)
 
 
 @pytest.mark.parametrize('clock', ['true', 'false'])

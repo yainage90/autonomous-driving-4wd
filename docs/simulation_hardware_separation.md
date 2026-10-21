@@ -148,94 +148,17 @@ TF 시험은 관측한 parent/child 관계와 예상 발행 노드 집합을 확
 동일 edge의 DDS writer별 소유권을 직접 추적하는 시험은 아니다.
 
 기존 Gazebo 주행·안전·복구·센서·watchdog 시험은 다음 도구로 매 case 새 시스템에서 실행할 수 있다.
-Gazebo 시험은 서로 병행하지 않는다. 입력 사본·JUnit·로그와 주행 bag·분석을 출력 경로에 보관한다.
+Gazebo 시험은 서로 병행하지 않는다. JUnit과 실행 로그만 출력 경로에 저장한다.
 출력 디렉터리는 새 경로여야 한다.
 실패한 case도 기록한 뒤 나머지를 실행하며, 하나라도 실패하면 최종 종료 코드는 1이다.
 
 ```bash
 source env.sh
 python3 src/vehicle_simulation/test/run_backend_regression.py \
-  --output evaluation_runs/005_separation/new_regression
+  --output log/backend_regression
 ```
 
 기본 case는 s01/s02/s03 각 3회, s05/s06 각 1회, 안전 전환·복구·센서·watchdog다.
-`--cases s02`처럼 일부만 선택할 수 있다. 기존 [회귀 기준](t9_4_regression.md)과
-[도착 평가 기준](simulation_validation.md)을 적용한다. 자동 접촉 검출은 추가하지 않았다.
+`--cases s02`처럼 일부만 선택할 수 있다. [회귀 기준](t9_4_regression.md)에 따라
+액션 결과·상태 전이·정지를 판정한다. 도착 오차와 접촉 여부는 자동 판정하지 않는다.
 `--startup-timeout`은 준비 대기 한도이며 기본 120초다. 목표 제출 이후의 기존 120초 판정과 구분한다.
-
-## 검증 결과
-
-실제 센서·모터 드라이버 및 실차 주행은 이 구현의 검증 범위에 포함하지 않는다.
-모사 드라이버의 정지는 물리 제동 성능을 증명하지 않는다.
-화면을 띄운 GUI 실행과 장애물 접촉 여부의 수동 관찰도 이번 headless 시험에 포함하지 않았다.
-
-전체 패키지의 별도 일반 설치 빌드는 `/tmp/vehicle_005_clean`에서 완료했다.
-이동된 launch·설정·월드가 symlink 없이 설치됨을 확인했고, description만 프로젝트 경로에 노출한
-모델 생성과 패키지 의존성 순환 검사도 통과했다.
-결과는 `evaluation_runs/005_separation/installed_resources.json`에 있다.
-
-기존 시뮬레이션 URDF와 새 `simulation:=true` URDF의 요소·속성·텍스트를 비교해 동등함을 확인했다.
-기존 CLI bridge와 새 YAML bridge의 `/clock` QoS도 실제 발행자를 비교해
-reliable/volatile로 같음을 확인했다(`clock_qos_comparison/report.json`).
-real 하드웨어 미구현·시간 기준 불일치·누락된 설정·잘못된 mode는 실제 launch에서
-노드를 시작하기 전에 실패했다(`negative_launch/`).
-
-기본 시험은 별도 설치본을 로드하고 쓰기 가능한 ROS 로그 경로와 domain 91을 지정했다.
-Python 227개와 C++ watchdog 9개가 통과했고, opt-in 통합 시험 18개는 skip됐다.
-JUnit 사본과 집계는 `evaluation_runs/005_separation/final_package_tests/`에 보관했다.
-colcon 집계의 255개에는 CTest wrapper 1개가 추가로 포함된다.
-
-backend/mode 통합 시험 `final_matrix_r2/`은 6개 조합 모두 통과했다.
-simulation과 mock hardware의 manual/mapping/navigation에서 노드 구성·bool 시간 파라미터·
-센서 stamp·토픽 발행자 수·TF 관계를 확인했다.
-mock의 수동 arm·timeout·비상정지, 목표 주행 및 scan/odom/status 중단·구동기 재시작 시의
-정지와 명시적 재시작도 포함한다. Gazebo를 실행한 조합은 모두 GUI 없는 렌더링을 사용했다.
-
-시뮬레이션 시나리오별 검증 결과와 기록 위치는 다음과 같다.
-경로는 `evaluation_runs/005_separation/` 기준이다.
-
-| 시나리오 | 결과 | 기록 위치 |
-|---|---|---|
-| s01/s02/s03 정상 목표 | 각각 독립 실행 3회 통과 | `safe_domain_regression/01_s01`~`09_s03` |
-| s05 도달 불가 목표 | 도달 불가 판정과 실제 정지 확인 통과 | `clean_remaining/01_s05` |
-| s06 주행 중 취소 | 취소와 실제 정지 확인 통과 | `cause_original_runner/03_s06` |
-| 안전 전환 | 통과 | `final_backend_regression/12_safety` |
-| 복구 | 장애 주입·명시적 복구·새 목표 주행 통과 | `cause_original_runner/04_recovery` |
-| 센서 | scan·odom·TF·좌우 회전 통합 시험 6개 통과 | `final_backend_regression/14_sensors` |
-| 수신기 watchdog | 통합 시험 통과 | `final_backend_regression/15_watchdog` |
-
-`safe_domain_regression/`의 정상 목표 9회에서 최대 위치 오차는 0.08198m,
-최대 방향 오차는 4.638°, 최대 목표 제출→최종 상태 시간은 51.633초였다.
-
-### main과 현재 브랜치 비교 검증
-
-`main` (`6f14f1e`)을 `/tmp/vehicle005_cause_baseline`에 별도 빌드하고 현재 브랜치와 순차 비교했다.
-main 사본에는 화면 없는 동일 조건을 만들기 위한 RViz 제외와 Gazebo `-s --headless-rendering`을 적용했다.
-두 버전의 설치 경로와 Python 모듈 경로를 확인했으며, ROS 환경 경로에서 다른 프로젝트 설치본을
-제외한 뒤 각 설치본을 로드했다. 첫 반복은 main부터, 두 번째 반복은 현재 브랜치부터 실행했다.
-
-| 비교 조건 | main | 현재 브랜치 |
-|---|---|---|
-| s03 목표 주행 | 2회 통과 | 2회 통과 |
-| s06 주행 중 취소 | 2회 통과 | 2회 통과 |
-| 정지 확인 장애·명시적 복구·새 목표 주행 | 2회 통과 | 2회 통과 |
-| rosbag 기록을 켠 s03 | 2회 통과 | 2회 통과 |
-
-합계 16회가 모두 통과했다. 기존 시험의 성공·상태 전이·실제 1초 정지 판정과 시간 제한을 사용했고,
-시험마다 launch·Gazebo partition을 새로 만들고 ROS domain을 분리해 순차 실행했다.
-구동기 플러그인·guard·manager 코드와 안전/Nav2/controller 설정이 main과 동일한지 해시로 확인했다.
-
-rosbag으로 관측한 s03 4회의 위치 오차는 0.04239~0.04649m, 방향 오차는 최대 1.502°,
-목표 제출부터 최종 상태까지는 최대 45.049초였다. 위치 계산에는 기존 world→map 정합값을 사용했다.
-
-기존 `run_backend_regression.py`로 현재 브랜치의 s02·s03·s06·recovery를 추가 실행해
-4개 모두 통과했다. s02 위치 오차는 0.02131m, s03은 0.06174m였으며,
-s06은 취소 후 실제 정지, recovery는 장애 주입 후 명시적 복구와 새 목표 주행을 확인했다.
-비교 16회와 기존 도구 4회를 합쳐 총 20회가 모두 통과했다.
-
-실행 환경·JUnit·관측 자료와 bag 분석은 다음 경로에 보관했다.
-
-- `evaluation_runs/005_separation/cause_comparison/`: 기본 비교 12회.
-- `evaluation_runs/005_separation/cause_comparison_recording/`: 기록 포함 비교 4회와 bag 분석.
-- `evaluation_runs/005_separation/cause_original_runner/`: 기존 회귀 도구 실행 4회.
-- `evaluation_runs/005_separation/cause_comparison_overview.json`: 비교 검증 집계.
